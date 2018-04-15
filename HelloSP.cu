@@ -7,7 +7,7 @@
 #include <random>
 #include <assert.h>
 
-// #include "SpatialPooler.cu"
+#include "SpatialPooler.cu"
 
 using namespace std;
 
@@ -123,7 +123,7 @@ void generate01(bool* ar, size_t size, Real inDensity)
 {
 	for(int i=0; i < size; i++)
 	{
-		ar[i] = (rand()%100)/100 <= inDensity ? 1 : 0;
+		ar[i] = (Real)(rand()%100)/100 <= inDensity ? 1 : 0;
 	}
 }
 
@@ -134,27 +134,7 @@ void printErrorMessage(cudaError_t error, int memorySize){
     printf("==================================================\n");
 }
 
-struct args
-{
-    UInt inputDim[2];
-    bool* gInput;
-    UInt inputPitch;
-    UInt stimulusThreshold_;
-    Real potentialPct;
-    Real connectedPct;
-    Real synPermTrimThreshold_;
-    Real synPermMax_;
-    Real synPermConnected_;
-
-    int inBlockSizeX;
-    int inBlockSizeY;
-
-    bool* input_;
-    bool* potentialPools_;
-    Real* permanences_;
-    bool* connectedSynapses_;
-    UInt* overlaps_;
-};
+// TODO: Using pointer to pointers as 2D array is nonsense on CUDA. Refactor to use linear arrays. 
 
 int main(int argc, const char * argv[])
 {
@@ -172,8 +152,8 @@ int main(int argc, const char * argv[])
     srand(time(NULL));
 
     UInt colsDim[] = {DIM_SP, DIM_SP};
-    // dim3 grid_dm(DIM_SP/DIM_BLOCK, DIM_SP/DIM_BLOCK, 1);
-    // dim3 block_dm(DIM_BLOCK, DIM_BLOCK, 1);
+    dim3 grid_dm(DIM_SP/DIM_BLOCK * DIM_SP/DIM_BLOCK, 1, 1);
+    dim3 block_dm(DIM_BLOCK*DIM_BLOCK, 1, 1);
 
     bool* cols_host = new bool[SP_SIZE];
 	bool* in_host = new bool[IN_SIZE];
@@ -186,22 +166,17 @@ int main(int argc, const char * argv[])
 
     // construct input args
     args ar;
-    ar.inputDim[0] = DIM_INPUT; ar.inputDim[1] = DIM_INPUT; // Dimensions of the chunk of input each block works with
     ar.potentialPct=0.5;
     ar.connectedPct=0.5;
-    ar.stimulusThreshold_=0;
-    ar.synPermTrimThreshold_=0.025;
-    ar.synPermMax_=1.0;
-    ar.synPermConnected_=0.1;
-	// Why am I passing these as arguments??? Should be rather copied to global memory
-    // ar.gInput = new bool[IN_SIZE]; 
-    // generate01(ar.gInput, DIM_INPUT*DIM_INPUT, IN_DENSITY);
-    // ar.permanences_; // Allocated further
-    // ar.potentialPools_; // Allocated further
-    // ar.connectedSynapses_;
+    ar.stimulusThreshold=0;
+    ar.synPermTrimThreshold=0.025;
+    ar.synPermMax=1.0;
+    ar.synPermConnected=0.1;
+	ar.MAX_CONNECTED = MAX_CONNECTED;
+	ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
 
     UInt** potentialPools = new UInt*[SP_SIZE];
-    for(int i = 0; i < DIM_SP*DIM_SP; ++i) {
+    for(int i = 0; i < SP_SIZE; ++i) {
         potentialPools[i] = new UInt[MAX_CONNECTED];
     }
     //UInt** connected = new UInt*[SP_SIZE];
@@ -209,14 +184,14 @@ int main(int argc, const char * argv[])
     //    connected[i] = new UInt[MAX_CONNECTED];
     //}
 	Real** permanences = new Real*[SP_SIZE]; // potential array provides indexes
-    for(int i = 0; i < DIM_SP*DIM_SP; ++i) {
+    for(int i = 0; i < SP_SIZE; ++i) {
         permanences[i] = new Real[MAX_CONNECTED];
     }
 
 	UInt numPotential[SP_SIZE] = {0};
 	UInt numConnected[SP_SIZE] = {0};
 	potentialPools = generatePotentialPools(SP_SIZE, IN_BLOCK_SIZE, ar.potentialPct, MAX_CONNECTED, numPotential);
-	permanences = generatePermanences(SP_SIZE, IN_SIZE, potentialPools, ar.connectedPct, ar.synPermConnected_, ar.synPermMax_, MAX_CONNECTED, numPotential,
+	permanences = generatePermanences(SP_SIZE, IN_SIZE, potentialPools, ar.connectedPct, ar.synPermConnected, ar.synPermMax, MAX_CONNECTED, numPotential,
 					BLOCK_SIZE, IN_BLOCK_SIZE);
 	// Connected don't need to be copied to device - it's enough to allocate memory for it and compute on device
 	// connected = computeConnected(permanences, potentialPools, SP_SIZE, IN_SIZE, ar.synPermConnected_, MAX_CONNECTED, numPotential);
@@ -240,16 +215,16 @@ int main(int argc, const char * argv[])
 	size_t odc_pitch_in_bytes;
 	size_t adc_pitch_in_bytes;
 
-    result = cudaMalloc((void **) &in_dev, IN_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
-    result = cudaMalloc((void **) &cols_dev, SP_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
-    result = cudaMallocPitch((void **) &pot_dev, &pot_pitch_in_bytes, MAX_CONNECTED*sizeof(UInt), SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0); // width, height, x, y 
-    result = cudaMallocPitch((void **) &per_dev, &per_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
-    result = cudaMallocPitch((void **) &overlap_dc_dev, &odc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
-    result = cudaMallocPitch((void **) &active_dc_dev, &adc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
+    result = cudaMalloc((void **) &ar.cols_dev, SP_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
+    result = cudaMallocPitch((void **) &ar.pot_dev, &ar.pot_pitch_in_bytes, MAX_CONNECTED*sizeof(UInt), SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0); // width, height, x, y 
+    result = cudaMallocPitch((void **) &ar.per_dev, &ar.per_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMallocPitch((void **) &ar.overlap_dc_dev, &ar.odc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMallocPitch((void **) &ar.active_dc_dev, &ar.adc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
 
-    result = cudaMemcpy((void **) &in_dev, &in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    cudaMemcpy2D((void **) &pot_dev, pot_pitch_in_bytes, &potentialPools, MAX_CONNECTED*sizeof(UInt), MAX_CONNECTED*sizeof(UInt), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    cudaMemcpy2D((void **) &per_dev, per_pitch_in_bytes, &permanences, MAX_CONNECTED*sizeof(Real), MAX_CONNECTED*sizeof(Real), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy2D(ar.pot_dev, ar.pot_pitch_in_bytes, potentialPools, MAX_CONNECTED*sizeof(UInt), MAX_CONNECTED*sizeof(UInt), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy2D(ar.per_dev, ar.per_pitch_in_bytes, permanences, MAX_CONNECTED*sizeof(Real), MAX_CONNECTED*sizeof(Real), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 
     compute<<<grid_dm, block_dm, sm>>>(ar);
 

@@ -19,157 +19,69 @@
  */
 
 using namespace std;
-using namespace nupic;
+
+typedef unsigned int UInt;
+typedef double Real;
 
 struct args
 {
-    vector<UInt> inputDimensions;
+	// Parameters
     bool* gInput;
     UInt inputPitch;
-    UInt stimulusThreshold_;
+    UInt stimulusThreshold;
     Real potentialPct;
     Real connectedPct;
-    Real synPermTrimThreshold_;
-    Real synPermMax_;
-    Real synPermConnected_;
+    Real synPermTrimThreshold;
+    Real synPermMax;
+    Real synPermConnected;
 
-    int inBlockSizeX;
-    int inBlockSizeY;
+	// Constants
+	UInt MAX_CONNECTED;
+	UInt IN_BLOCK_SIZE; // Dims of input chunk for each cuda block
 
-    bool* input_;
-    bool* potentialPools_;
-    Real* permanences_;
-    bool* connectedSynapses_;
-    UInt* overlaps_;
+	// Global memory pointers
+    bool* in_dev;
+    bool* cols_dev;
+	UInt** pot_dev;
+	Real** per_dev;
+	Real* overlap_dc_dev; // odc serve to maintain same act. freq. for each col. (per block)
+	Real* active_dc_dev; // adc serve to compute boost factors
+
+	// Array pitches
+	size_t pot_pitch_in_bytes;
+	size_t per_pitch_in_bytes;
+	size_t odc_pitch_in_bytes;
+	size_t adc_pitch_in_bytes;
 };
 
 
-// Connect each column randomly to input
 __device__
-void init_potential(args* in)
+void calculateOverlap(bool* input, UInt** pot_dev, Real** per_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
 {
     int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int inputSize = in->inBlockSizeX*in->inBlockSizeY;
-    curandState s;
-    curand_init(452342,blockIdx.x * blockDim.x + threadIdx.x,0,&s);
-
-    for(int i=0; i < inputSize; i++)
+    olaps_sh[tx] = 0;
+    for(int i=0; i < MAX_CONNECTED; i++)
     {
-        // Connect potentialPct % of the input randomly
-        if(curand_uniform_double(&s) <= in->potentialPct)
-        {
-            in->potentialPools_[(blockDim.y*ty+tx)*inputSize + i] = 1;
-        }
-        else
-        {
-            in->potentialPools_[(blockDim.y*ty+tx)*inputSize + i] = 0;
-        }
-    }
-}
-
-__device__
-Real initPermConnected_(args* in)
-{
-    curandState s;
-    curand_init(312312,blockIdx.x * blockDim.x + threadIdx.x,0,&s);
-    Real p = in->synPermConnected_ +
-             (in->synPermMax_ - in->synPermConnected_)*(Real)curand_uniform_double(&s);
-    return p;
-}
-
-__device__
-Real initPermNonConnected_(args* in)
-{
-    curandState s;
-    curand_init(564564,blockIdx.x * blockDim.x + threadIdx.x,0,&s);
-    Real p = in->synPermConnected_ * (Real)curand_uniform_double(&s);
-    return p;
-}
-
-// Init permananences randomly and assign connections according to threshold
-__device__
-void init_permanences(args* in)
-{
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int inputSize = in->inBlockSizeX*in->inBlockSizeY;
-
-    curandState s;
-    curand_init(979123,blockIdx.x * blockDim.x + threadIdx.x,0,&s);
-
-    for(int i=0; i < inputSize; i++)
-    {
-        if(in->potentialPools_[(blockDim.y*ty+tx)*inputSize + i] < 1)
-        {
-            continue;
-        }
-        if(curand_uniform_double(&s) <= in->connectedPct)
-        {
-            in->permanences_[(blockDim.y*ty+tx)*inputSize + i] = initPermConnected_(in);
-        }
-        else
-        {
-            in->permanences_[(blockDim.y*ty+tx)*inputSize + i] = initPermNonConnected_(in);
-        }
-        in->permanences_[(blockDim.y*ty+tx)*inputSize + i] =
-                in->permanences_[(blockDim.y*ty+tx)*inputSize + i] < in->synPermTrimThreshold_ ? 0 : in->permanences_[(blockDim.y*ty+tx)*inputSize + i];
-    }
-}
-
-__device__
-void initialize(args* in)
-{
-    init_potential(in);
-    init_permanences(in);
-    // TODO: Update active according to permanences
-}
-
-__device__
-void calculateOverlap(bool* input, bool* connectedSynapses_, UInt* overlaps_, UInt inputSize)
-{
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    overlaps_[ty*blockDim.y + tx] = 0;
-    for(int i=0; i < inputSize; i++)
-    {
-        overlaps_[ty*blockDim.x + tx] +=
-                connectedSynapses_[(blockDim.y*ty+tx)*inputSize + i] * input[i];
+		int in_idx = pot_dev[tx][i];
+		if(input[inBlockSize*blockIdx.x + in_idx] && per_dev[tx][i] >= threshold)
+        	olaps_sh[tx]++;
     }
 }
 
 __global__
-void compute(args* ar)
+void compute(args ar)
 {
+    // x - column, y - row in cuda
     int tx = threadIdx.x;
     int ty = threadIdx.y;
-    // x - column, y - row in cuda
-    int inBlockSizeX = ceil(in->inputDimensions[1]/gridDim.x);
-    int inBlockSizeY = ceil(in->inputDimensions[0]/gridDim.y);
     int inX = blockIdx.x*blockDim.x+tx;
     int inY = blockIdx.y*blockDim.y+ty;
 
-    extern __shared__ bool* shared;
-    bool* input_ = shared;
-    bool* connectedSynapses_ = (bool*) input_[blockDim.x*blockDim.y];
-    bool* potentialPools_ = &connectedSynapses_[blockDim.x*blockDim.y*inBlockSizeX*inBlockSizeY];
-    Real* permanences_ = (Real*)&potentialPools_[blockDim.x*blockDim.y*inBlockSizeX*inBlockSizeY];
-    UInt* overlaps_ = (UInt*) &permanences_[blockDim.x*blockDim.y];
+	// Pointers to dynamically shared memory are all given the same address
+    extern __shared__ UInt shared[];
+	UInt* olaps_sh = &shared[0];
+	
 
-    in->input_ = input_;
-    in->connectedSynapses_ = connectedSynapses_;
-    in->potentialPools_ = potentialPools_;
-    in->permanences_ = permanences_;
-    in->overlaps_ = overlaps_;
-    in->inBlockSizeX = inBlockSizeX;
-    in->inBlockSizeY = inBlockSizeY;
-    initialize(in);
-
-    if(tx < inBlockSizeX && ty < inBlockSizeY)
-    {
-        input_[ty*inBlockSizeX+tx] = in->gInput[inY*in->inputPitch+inX];
-        calculateOverlap(input_, connectedSynapses_, overlaps_, inBlockSizeX*inBlockSizeY);
-    }
 
 	// Assign a thread in each block to read data from potential matrix, input and permanences into local memory
 
@@ -177,6 +89,9 @@ void compute(args* ar)
 	// Each index corresponds to an input in the local input matrix
 	// Then it reads permanence corresponding to the local input in the local permanences matrix (same index as the index 
 	// of the index in the potential matrix), and if bigger than a threshold -> increases the columns overlap (not by 1, but by boost factor)
+
+	calculateOverlap(ar.in_dev, ar.pot_dev, ar.per_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+
 	// These (boosted) overlaps need to be stored in shared memory. Now, we need to select k cols with the largest overlap.
 	// __syncthreads() to make sure all threads (cols) computed its boosted overlap
 	// Each thread goes through the overlaps stored in shared array, computes the number of cols with larger overlaps and if this is < sparsity*blockSize -> active
