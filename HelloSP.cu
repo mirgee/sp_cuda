@@ -1,6 +1,5 @@
 #include <iostream>
 #include <stdio.h>
-#include <vector>
 #include <algorithm>
 #include <ctime>
 #include <cstdlib>
@@ -15,9 +14,6 @@ using namespace std;
 typedef unsigned int UInt;
 typedef double Real;
 
-// This is problematic - we need to keep track of how many input bits have we connected :/
-// But it should pay off if MAX_CONNECTED << inputSize
-// Simpler alternative is a binary matrix numCols x inBlockSize (a col is connected locally to in block size)
 UInt* generatePotentialPools(int cols, const UInt IN_BLOCK_SIZE, Real potentialPct, const UInt MAX_CONNECTED, UInt* numPotential)
 {
     UInt* potentialPools = new UInt[cols*MAX_CONNECTED];
@@ -111,7 +107,7 @@ UInt** computeConnected(Real** permanences, UInt** potential, UInt cols, UInt in
 		{
 			if(permanences[i][j] < synPermConnected_)
 			{
-				connected_arr[i][connected++] = j; // SISEGF
+				connected_arr[i][connected++] = j;
 			}
 		}
 	}
@@ -128,12 +124,9 @@ void generate01(bool* ar, size_t size, Real inDensity)
 
 void printErrorMessage(cudaError_t error, int memorySize){
     printf("==================================================\n");
-    printf("MEMORY ALLOCATION ERROR  : %s\n", cudaGetErrorString(error));
-    printf("Wished allocated memory : %d\n", memorySize);
+    printf("MEMORY ERROR  : %s\n", cudaGetErrorString(error));
     printf("==================================================\n");
 }
-
-// TODO: Using pointer to pointers as 2D array is nonsense on CUDA. Refactor to use linear arrays. 
 
 int main(int argc, const char * argv[])
 {
@@ -150,77 +143,77 @@ int main(int argc, const char * argv[])
 	const UInt IN_BLOCK_SIZE = IN_DIM_BLOCK * IN_DIM_BLOCK;
     srand(time(NULL));
 
-    UInt colsDim[] = {DIM_SP, DIM_SP};
     dim3 grid_dm(DIM_SP/DIM_BLOCK * DIM_SP/DIM_BLOCK, 1, 1);
     dim3 block_dm(DIM_BLOCK*DIM_BLOCK, 1, 1);
 
-    bool* cols_host = new bool[SP_SIZE];
-	bool* in_host = new bool[IN_SIZE];
 
 	// Shared mem.: permanences, potential conn., active/overlap duty cycles, active cols - copied from global
 	// 				overlaps, connected counts, boost factors + their mins (using active d.c.) - computed locally
     // TODO: Compute the mem. requirements, allocate proper amount
 	// input chunk, overlaps, connected, boost factors
 	// size_t sm = (IN_BLOCK_SIZE)*sizeof(bool) + (2*BLOCK_SIZE)*sizeof(UInt) + (BLOCK_SIZE)*sizeof(Real);
-	size_t sm = BLOCK_SIZE*sizeof(UInt);
+	size_t sm = BLOCK_SIZE*(sizeof(bool) + sizeof(UInt));
 
     // construct input args
     args ar;
+	ar.iteration_num=0;
+	ar.learn=true;
     ar.potentialPct=0.5;
     ar.connectedPct=0.5;
     ar.stimulusThreshold=0;
     ar.synPermTrimThreshold=0.025;
     ar.synPermMax=1.0;
     ar.synPermConnected=0.1;
+	ar.synPermActiveInc=0.05;
+	ar.synPermInactiveDec=0.008;
+	ar.synPermBelowStimulusInc=ar.synPermConnected / 10.0;
+	ar.dutyCyclePeriod=1000;
+	ar.boostStrength=0.05; // 0 means no boosting
+	ar.minOdc=0; // maxOcd * minPctOdc
+	ar.minPctOdc=0.001;
+	ar.update_period=50;
+	ar.SP_SIZE = SP_SIZE;
 	ar.MAX_CONNECTED = MAX_CONNECTED;
 	ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
 
+	// Host memory pointers
+    bool* cols_host = new bool[SP_SIZE];
+	bool* in_host = new bool[IN_SIZE];
     UInt* potentialPools;
-
-    //UInt** connected = new UInt*[SP_SIZE];
-    //for(int i = 0; i < DIM_SP*DIM_SP; ++i) {
-    //    connected[i] = new UInt[MAX_CONNECTED];
-    //}
 	Real* permanences;
+	Real* boosts = new Real[SP_SIZE];
+	UInt* numPotential = new UInt[SP_SIZE];
+	UInt* numConnected = new UInt[SP_SIZE];
 
-	UInt numPotential[SP_SIZE] = {0};
-	UInt numConnected[SP_SIZE] = {0};
+	// Host memory allocation	
+	std::fill_n(boosts, SP_SIZE, 1);
+	std::fill_n(numPotential, SP_SIZE, 0);
+	std::fill_n(numConnected, SP_SIZE, 0);
+
 	potentialPools = generatePotentialPools(SP_SIZE, IN_BLOCK_SIZE, ar.potentialPct, MAX_CONNECTED, numPotential);
 	permanences = generatePermanences(SP_SIZE, IN_SIZE, potentialPools, ar.connectedPct, ar.synPermConnected, ar.synPermMax, MAX_CONNECTED, numPotential,
 					BLOCK_SIZE, IN_BLOCK_SIZE);
-	// Connected don't need to be copied to device - it's enough to allocate memory for it and compute on device
-	// connected = computeConnected(permanences, potentialPools, SP_SIZE, IN_SIZE, ar.synPermConnected_, MAX_CONNECTED, numPotential);
 	generate01(in_host, IN_SIZE, IN_DENSITY);
 
-
-	// Let's start with 1D computation only - we have CC3.0, so this is not a limitation
-	// Hyperparameters will be passed to global memory as a struct
-	// TODO: Make a list of necessary parameters to compute(), make a complete arg struct
-	// Or maybe first write a sketch of the compute function and then decide what needs to be passed in?
+	// Global memory allocation
     cudaError_t result;
-    bool* in_dev;
-    bool* cols_dev;
-	UInt* pot_dev;
-	Real* per_dev;
-	Real* overlap_dc_dev; // odc serve to maintain same act. freq. for each col. (per block)
-	Real* active_dc_dev; // adc serve to compute boost factors
-
-	size_t pot_pitch_in_bytes;
-	size_t per_pitch_in_bytes;
-	size_t odc_pitch_in_bytes;
-	size_t adc_pitch_in_bytes;
-
     result = cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
     result = cudaMalloc((void **) &ar.cols_dev, SP_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
+	result = cudaMalloc((void **) &ar.boosts_dev, SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0);
+	result = cudaMalloc((void **) &ar.numPot_dev, SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0);
     result = cudaMallocPitch((void **) &ar.pot_dev, &ar.pot_pitch_in_bytes, MAX_CONNECTED*sizeof(UInt), SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0); // width, height, x, y 
     result = cudaMallocPitch((void **) &ar.per_dev, &ar.per_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
-    result = cudaMallocPitch((void **) &ar.overlap_dc_dev, &ar.odc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
-    result = cudaMallocPitch((void **) &ar.active_dc_dev, &ar.adc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMallocPitch((void **) &ar.odc_dev, &ar.odc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMallocPitch((void **) &ar.adc_dev, &ar.adc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
 
+	// Memcpy to device
     result = cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy(ar.boosts_dev, boosts, SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy(ar.numPot_dev, numPotential, SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy2D(ar.pot_dev, ar.pot_pitch_in_bytes, potentialPools, MAX_CONNECTED*sizeof(UInt), MAX_CONNECTED*sizeof(UInt), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy2D(ar.per_dev, ar.per_pitch_in_bytes, permanences, MAX_CONNECTED*sizeof(Real), MAX_CONNECTED*sizeof(Real), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 
+	// Kernel call
     compute<<<grid_dm, block_dm, sm>>>(ar);
 
     // Memcpy from device
@@ -231,7 +224,8 @@ int main(int argc, const char * argv[])
 		if(cols_host[i] > 0) ones++;
 	printf("Sparsity: %f \n", (Real)ones/SP_SIZE);
     
-    cudaFree(ar.in_dev); cudaFree(ar.cols_dev); cudaFree(ar.pot_dev); cudaFree(ar.per_dev); 
+    cudaFree(ar.in_dev); cudaFree(ar.cols_dev); cudaFree(ar.pot_dev); cudaFree(ar.per_dev); cudaFree(ar.boosts_dev);
+	cudaFree(ar.odc_dev); cudaFree(ar.adc_dev); cudaFree(ar.numPot_dev);
 
     return 0;
 }
