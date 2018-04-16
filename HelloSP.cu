@@ -1,4 +1,5 @@
 #include <iostream>
+#include <stdio.h>
 #include <vector>
 #include <algorithm>
 #include <ctime>
@@ -17,20 +18,19 @@ typedef double Real;
 // This is problematic - we need to keep track of how many input bits have we connected :/
 // But it should pay off if MAX_CONNECTED << inputSize
 // Simpler alternative is a binary matrix numCols x inBlockSize (a col is connected locally to in block size)
-UInt** generatePotentialPools(int cols, const UInt IN_BLOCK_SIZE, Real potentialPct, const UInt MAX_CONNECTED, UInt* numPotential)
+UInt* generatePotentialPools(int cols, const UInt IN_BLOCK_SIZE, Real potentialPct, const UInt MAX_CONNECTED, UInt* numPotential)
 {
-    UInt** potentialPools = new UInt*[cols];
+    UInt* potentialPools = new UInt[cols*MAX_CONNECTED];
     int connected = 0;
     for(int i=0; i < cols; i++)
     {
     	connected = 0;
-        potentialPools[i] = new UInt[MAX_CONNECTED];
 		// Generated indeces should be in (0,IN_BLOCK_SIZE) and their count should be <= MAX_CONNECTED and around potentialPct*IN_BLOCK_SIZE
         for(int j=0; j < IN_BLOCK_SIZE; j++)
         {
             if((Real)(rand()%100)/100 <= potentialPct && connected <= MAX_CONNECTED)
             {
-                potentialPools[i][connected++] = j;
+                potentialPools[i*MAX_CONNECTED + connected++] = j;
                 numPotential[i]++;
             }
         }
@@ -51,11 +51,11 @@ Real initPermanencesNotConnected(Real synPermConnected_)
 	return p;
 }
 
-Real** generatePermanences(int cols, int inputSize, UInt** potential, Real connectedPct,
+Real* generatePermanences(int cols, int inputSize, UInt* potential, Real connectedPct,
 		Real synPermConnected_, Real synPermMax_, const UInt MAX_CONNECTED, UInt* numPotential,
 	   	const UInt BLOCK_SIZE, const UInt IN_BLOCK_SIZE)
 {
-    Real** permanences = new Real*[cols];
+    Real* permanences = new Real[cols*MAX_CONNECTED];
 	int connected = 0;
 	int curr_block = 0;
     bool found = false;
@@ -63,7 +63,6 @@ Real** generatePermanences(int cols, int inputSize, UInt** potential, Real conne
 	for(int i=0; i < cols; i++)
 	{
 		connected = 0;
-        permanences[i] = new Real[MAX_CONNECTED];
 		// We need to only go through the input block corresponding to the current column
 		// This means we need to convert current column to the input block number
 		curr_block = i % BLOCK_SIZE;
@@ -73,7 +72,7 @@ Real** generatePermanences(int cols, int inputSize, UInt** potential, Real conne
 			found=false;
             for(int k=0; k < numPotential[i]; k++)
             {
-                if(potential[i][k] == j % IN_BLOCK_SIZE) {
+                if(potential[i*MAX_CONNECTED+k] == j % IN_BLOCK_SIZE) {
 					found = true;
 					break;
 				}
@@ -85,11 +84,11 @@ Real** generatePermanences(int cols, int inputSize, UInt** potential, Real conne
             {
                 if((Real)(rand()%100)/100 <= connectedPct)
                 {
-                    permanences[i][connected++] = initPermanencesConnected(synPermConnected_, synPermMax_);
+                    permanences[i*MAX_CONNECTED+connected++] = initPermanencesConnected(synPermConnected_, synPermMax_);
                 }
                 else
                 {
-                    permanences[i][connected++] = initPermanencesNotConnected(synPermConnected_);
+                    permanences[i*MAX_CONNECTED+connected++] = initPermanencesNotConnected(synPermConnected_);
                 }
             }
 		}
@@ -162,7 +161,8 @@ int main(int argc, const char * argv[])
 	// 				overlaps, connected counts, boost factors + their mins (using active d.c.) - computed locally
     // TODO: Compute the mem. requirements, allocate proper amount
 	// input chunk, overlaps, connected, boost factors
-	size_t sm = (IN_BLOCK_SIZE)*sizeof(bool) + (2*BLOCK_SIZE)*sizeof(UInt) + (BLOCK_SIZE)*sizeof(Real);
+	// size_t sm = (IN_BLOCK_SIZE)*sizeof(bool) + (2*BLOCK_SIZE)*sizeof(UInt) + (BLOCK_SIZE)*sizeof(Real);
+	size_t sm = BLOCK_SIZE*sizeof(UInt);
 
     // construct input args
     args ar;
@@ -175,18 +175,13 @@ int main(int argc, const char * argv[])
 	ar.MAX_CONNECTED = MAX_CONNECTED;
 	ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
 
-    UInt** potentialPools = new UInt*[SP_SIZE];
-    for(int i = 0; i < SP_SIZE; ++i) {
-        potentialPools[i] = new UInt[MAX_CONNECTED];
-    }
+    UInt* potentialPools;
+
     //UInt** connected = new UInt*[SP_SIZE];
     //for(int i = 0; i < DIM_SP*DIM_SP; ++i) {
     //    connected[i] = new UInt[MAX_CONNECTED];
     //}
-	Real** permanences = new Real*[SP_SIZE]; // potential array provides indexes
-    for(int i = 0; i < SP_SIZE; ++i) {
-        permanences[i] = new Real[MAX_CONNECTED];
-    }
+	Real* permanences;
 
 	UInt numPotential[SP_SIZE] = {0};
 	UInt numConnected[SP_SIZE] = {0};
@@ -205,8 +200,8 @@ int main(int argc, const char * argv[])
     cudaError_t result;
     bool* in_dev;
     bool* cols_dev;
-	UInt** pot_dev;
-	Real** per_dev;
+	UInt* pot_dev;
+	Real* per_dev;
 	Real* overlap_dc_dev; // odc serve to maintain same act. freq. for each col. (per block)
 	Real* active_dc_dev; // adc serve to compute boost factors
 
@@ -228,11 +223,15 @@ int main(int argc, const char * argv[])
 
     compute<<<grid_dm, block_dm, sm>>>(ar);
 
-    // // Memcpy from device
-    // result = cudaMemcpy2D(cols_host, cols_pitch_in_bytes, cols_dev,
-    //     		colsDim[0] * sizeof(bool), colsDim[1] * sizeof(bool), cudaMemcpyDeviceToHost);
+    // Memcpy from device
+    result = cudaMemcpy(cols_host, ar.cols_dev, SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0); 
+
+	int ones = 0;
+	for(int i=0; i < SP_SIZE; i++)
+		if(cols_host[i] > 0) ones++;
+	printf("Sparsity: %f \n", (Real)ones/SP_SIZE);
     
-    cudaFree(in_dev); cudaFree(cols_dev); cudaFree(pot_dev); cudaFree(per_dev); 
+    cudaFree(ar.in_dev); cudaFree(ar.cols_dev); cudaFree(ar.pot_dev); cudaFree(ar.per_dev); 
 
     return 0;
 }

@@ -1,5 +1,6 @@
 #include <cstring>
 #include <iostream>
+#include <stdio.h>
 #include <vector>
 #include "curand_kernel.h"
 
@@ -42,8 +43,8 @@ struct args
 	// Global memory pointers
     bool* in_dev;
     bool* cols_dev;
-	UInt** pot_dev;
-	Real** per_dev;
+	UInt* pot_dev;
+	Real* per_dev;
 	Real* overlap_dc_dev; // odc serve to maintain same act. freq. for each col. (per block)
 	Real* active_dc_dev; // adc serve to compute boost factors
 
@@ -56,16 +57,34 @@ struct args
 
 
 __device__
-void calculateOverlap(bool* input, UInt** pot_dev, Real** per_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
+void calculateOverlap(bool* input, UInt* pot_dev, Real* per_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
 {
     int tx = threadIdx.x;
     olaps_sh[tx] = 0;
     for(int i=0; i < MAX_CONNECTED; i++)
     {
-		int in_idx = pot_dev[tx][i];
-		if(input[inBlockSize*blockIdx.x + in_idx] && per_dev[tx][i] >= threshold)
+		int in_idx = pot_dev[tx*MAX_CONNECTED+i];
+		if(input[inBlockSize*blockIdx.x + in_idx] && per_dev[tx*MAX_CONNECTED+i] >= threshold)
         	olaps_sh[tx]++;
     }
+}
+
+__device__
+void inhibitColumns(UInt* olaps_sh, bool* cols_dev, bool &active)
+{
+    int tx = threadIdx.x;
+	int numLarger = 0;
+	active = false;
+	
+	for(int i=0; i < blockDim.x; i++)
+	{
+		if(olaps_sh[i] > olaps_sh[tx]) numLarger++;
+	}
+	if(numLarger < 0.02*blockDim.x) active = true;
+
+	__syncthreads();
+
+	cols_dev[blockIdx.x*blockDim.x + tx] = active;
 }
 
 __global__
@@ -77,24 +96,26 @@ void compute(args ar)
     int inX = blockIdx.x*blockDim.x+tx;
     int inY = blockIdx.y*blockDim.y+ty;
 
+	bool active = false;
+
 	// Pointers to dynamically shared memory are all given the same address
     extern __shared__ UInt shared[];
 	UInt* olaps_sh = &shared[0];
-	
 
-
-	// Assign a thread in each block to read data from potential matrix, input and permanences into local memory
-
-	// Each thread will access a row in potential matrix and go through the indeces there (lengths of the for loops will be very similar -> no slowdown)
-	// Each index corresponds to an input in the local input matrix
-	// Then it reads permanence corresponding to the local input in the local permanences matrix (same index as the index 
-	// of the index in the potential matrix), and if bigger than a threshold -> increases the columns overlap (not by 1, but by boost factor)
+	// Assign a thread in each block to read data from potential matrix, input and permanences into local memory ?
 
 	calculateOverlap(ar.in_dev, ar.pot_dev, ar.per_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
-	// These (boosted) overlaps need to be stored in shared memory. Now, we need to select k cols with the largest overlap.
-	// __syncthreads() to make sure all threads (cols) computed its boosted overlap
+	__syncthreads();
+
+	// Choose winning columns (with most overlaps):
 	// Each thread goes through the overlaps stored in shared array, computes the number of cols with larger overlaps and if this is < sparsity*blockSize -> active
+	inhibitColumns(olaps_sh, ar.cols_dev, active);
+	
+	__syncthreads();
+
+	// printf(" %d ", olaps_sh[tx]);
+
 
 	// Active cols will increment permanences of their active connections / decrement inactive
 
