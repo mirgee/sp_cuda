@@ -24,13 +24,8 @@ struct args
 	Real minPctOdc;
 	bool learn;
 
-	// Constants
-	UInt SP_SIZE;
-	UInt MAX_CONNECTED;
-	UInt IN_BLOCK_SIZE; // Dims of input chunk for each cuda block
-
 	// Global memory pointers
-    bool* in_dev;
+	bool* in_dev;
     bool* cols_dev;
 	UInt* pot_dev;
 	Real* per_dev;
@@ -38,6 +33,11 @@ struct args
 	Real* odc_dev; // odc serve to maintain same act. freq. for each col. (per block)
 	Real* adc_dev; // adc serve to compute boost factors
 	UInt* numPot_dev;
+
+	// Constants
+	UInt SP_SIZE;
+	UInt MAX_CONNECTED;
+	UInt IN_BLOCK_SIZE; // Dims of input chunk for each cuda block
 
 	// Array pitches
 	size_t pot_pitch_in_bytes;
@@ -49,7 +49,6 @@ struct args
 	UInt iteration_num;
 	UInt update_period;
 };
-
 
 __device__
 void calculateOverlap(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
@@ -158,9 +157,13 @@ void updateMinOdc(Real* odc_dev, Real &minOdc, Real minPctOdc, const UInt SP_SIZ
 }
 
 __global__
-void compute(args ar)
+void compute(args* ar_ptr)
 {
-	ar.iteration_num++;
+	if (blockIdx.x == 0 && threadIdx.x == 0) 
+		ar_ptr->iteration_num++;
+	
+	args ar = *ar_ptr;
+
 	bool active = false;
 	Real avg_act = 0;
 
@@ -168,7 +171,7 @@ void compute(args ar)
 	UInt* olaps_sh = &shared[0];
 	bool* active_sh = (bool*)&shared[blockDim.x];
 
-	// TODO: Decide on what to copy to local memory. What would be the task size limit implications?
+	// TODO: Decide on what to copy to local memory. 
 	// TODO: When do we need to synchronize threads?
 
 	calculateOverlap(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
@@ -184,6 +187,8 @@ void compute(args ar)
 	adaptSynapses(ar.in_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 	
 	__syncthreads();
+
+	// TODO: adaptSynapses, (updateDutyCycles, bumpUp, updateMinOdc) and (averageActivity, updateBoosts) can run independently in parallel.
 
 	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 

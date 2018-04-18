@@ -195,8 +195,13 @@ int main(int argc, const char * argv[])
 					BLOCK_SIZE, IN_BLOCK_SIZE);
 	generate01(in_host, IN_SIZE, IN_DENSITY);
 
+	// Global memory pointers
+	args* ar_dev;
+
 	// Global memory allocation
     cudaError_t result;
+    result = cudaMalloc((void **) &ar_dev, sizeof(ar)); if(result) printErrorMessage(result, 0);
+    result = cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
     result = cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
     result = cudaMalloc((void **) &ar.cols_dev, SP_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
 	result = cudaMalloc((void **) &ar.boosts_dev, SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0);
@@ -207,6 +212,7 @@ int main(int argc, const char * argv[])
     result = cudaMallocPitch((void **) &ar.adc_dev, &ar.adc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
 
 	// Memcpy to device
+    result = cudaMemcpy(ar_dev, &ar, sizeof(ar), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy(ar.boosts_dev, boosts, SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy(ar.numPot_dev, numPotential, SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
@@ -214,7 +220,8 @@ int main(int argc, const char * argv[])
     result = cudaMemcpy2D(ar.per_dev, ar.per_pitch_in_bytes, permanences, MAX_CONNECTED*sizeof(Real), MAX_CONNECTED*sizeof(Real), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 
 	// Kernel call
-    compute<<<grid_dm, block_dm, sm>>>(ar);
+	// TODO: Only pointer to args in global memory should be passed in
+    compute<<<grid_dm, block_dm, sm>>>(ar_dev);
 
     // Memcpy from device
     result = cudaMemcpy(cols_host, ar.cols_dev, SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0); 
