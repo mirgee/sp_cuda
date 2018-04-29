@@ -70,6 +70,12 @@ void setup_device1D(args& ar, bool* in_host, UInt* numPotential, UInt* potential
     result = cudaMemcpy(ar.boosts_dev, boosts, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 }
 
+void free_memory(args& ar)
+{
+    cudaFree(ar.in_dev); cudaFree(ar.cols_dev); cudaFree(ar.pot_dev); cudaFree(ar.per_dev); cudaFree(ar.boosts_dev);
+	cudaFree(ar.odc_dev); cudaFree(ar.adc_dev); cudaFree(ar.numPot_dev);
+}
+
 
 
 void testCalculateOverlap()
@@ -147,9 +153,38 @@ void testCalculateOverlap()
 
 	assert(compare<UInt>(correct_overlaps, olaps, SP_SIZE));
 	// compare<UInt>(correct_overlaps, olaps, SP_SIZE);
+	
+	free_memory(ar);
+}
+
+void testInhibitColumns()
+{
+	// It is enough to test a single block here
+	const UInt BLOCK_SIZE = 16;
+	Real localAreaDensity = 0.3;
+
+	// TODO: Maybe we should implement some tie-breaking
+	UInt olaps[BLOCK_SIZE] = 			{ 10, 15, 8, 9, 14, 10, 23, 19, 3, 20, 19, 27, 11, 4, 15, 2 };
+	bool correct_active[BLOCK_SIZE] = 	{ 0,  0,  0, 0, 0,  0,  1,  1,  0, 1,  1,  1,  0,  0, 0,  0 };
+	bool actual_active[BLOCK_SIZE];
+
+	bool* cols_dev;
+	UInt* olaps_dev;
+
+    cudaError_t result = cudaMalloc((void **) &cols_dev, BLOCK_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
+    result = cudaMalloc((void **) &olaps_dev, BLOCK_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0);
+
+    result = cudaMemcpy(olaps_dev, olaps, BLOCK_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+
+	inhibitColumns_wrapper<<<1, BLOCK_SIZE, BLOCK_SIZE*(sizeof(UInt)+sizeof(bool))>>>(olaps_dev, cols_dev, localAreaDensity, BLOCK_SIZE);
+
+    result = cudaMemcpy(actual_active, cols_dev, BLOCK_SIZE*sizeof(bool), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0);
+
+	assert(compare(correct_active, actual_active, BLOCK_SIZE));
 }
 
 int main(int argc, const char * argv[])
 {
-	testCalculateOverlap();
+	// testCalculateOverlap();
+	testInhibitColumns();
 }

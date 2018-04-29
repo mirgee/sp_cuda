@@ -12,6 +12,7 @@ struct args
     UInt stimulusThreshold;
     Real potentialPct;
     Real connectedPct;
+	Real localAreaDensity;
     Real synPermTrimThreshold;
     Real synPermMax;
     Real synPermConnected;
@@ -72,7 +73,7 @@ void calculateOverlap(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_de
 
 // TODO: This could be done via parallel sorting.
 __device__
-void inhibitColumns(UInt* olaps_sh, bool* cols_dev, bool* active_sh, bool &active)
+void inhibitColumns(UInt* olaps_sh, bool* cols_dev, bool* active_sh, bool &active, Real sparsity)
 {
     int tx = threadIdx.x;
 	int numLarger = 0;
@@ -82,7 +83,7 @@ void inhibitColumns(UInt* olaps_sh, bool* cols_dev, bool* active_sh, bool &activ
 	{
 		if(olaps_sh[i] > olaps_sh[tx]) numLarger++;
 	}
-	if(numLarger < 0.02*blockDim.x) active = true;
+	if(numLarger < sparsity*blockDim.x) active = true;
 
 	__syncthreads();
 
@@ -183,7 +184,7 @@ void compute(args* ar_ptr)
 
 	__syncthreads();
 
-	inhibitColumns(olaps_sh, ar.cols_dev, active_sh, active);
+	inhibitColumns(olaps_sh, ar.cols_dev, active_sh, active, ar.localAreaDensity);
 	
 	__syncthreads();
 
@@ -230,4 +231,21 @@ void calculateOverlap_wrapper(bool* input, UInt* pot_dev, Real* per_dev, Real* b
 
 	if(blockDim.x*blockIdx.x+threadIdx.x < SP_SIZE)
 		olaps_dev[blockDim.x*blockIdx.x+threadIdx.x] = olaps_sh[threadIdx.x];
+}
+
+
+__global__
+void inhibitColumns_wrapper(UInt* olaps_dev, bool* cols_dev, Real localAreaDensity, const UInt BLOCK_SIZE)
+{
+	extern __shared__ UInt shared[];
+	UInt* olaps_sh = &shared[0];
+	bool* active_sh = (bool*) &olaps_sh[BLOCK_SIZE];
+
+	olaps_sh[threadIdx.x] = olaps_dev[threadIdx.x];
+
+	bool active = false;
+
+	__syncthreads();
+
+	inhibitColumns(olaps_sh, cols_dev, active_sh, active, localAreaDensity);
 }

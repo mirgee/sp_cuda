@@ -158,6 +158,7 @@ int main(int argc, const char * argv[])
     args ar;
 	ar.iteration_num=0;
 	ar.learn=true;
+	ar.localAreaDensity=0.3;
     ar.potentialPct=0.5;
     ar.connectedPct=0.5;
     ar.stimulusThreshold=0;
