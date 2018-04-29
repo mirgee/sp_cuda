@@ -3,7 +3,7 @@
 using namespace std;
 
 typedef unsigned int UInt;
-typedef double Real;
+typedef float Real;
 
 struct args
 {
@@ -27,6 +27,7 @@ struct args
 	// Global memory pointers
 	bool* in_dev;
     bool* cols_dev;
+	UInt* olaps_dev;
 	UInt* pot_dev;
 	Real* per_dev;
 	Real* boosts_dev;
@@ -44,24 +45,28 @@ struct args
 	size_t per_pitch_in_bytes;
 	size_t odc_pitch_in_bytes;
 	size_t adc_pitch_in_bytes;
+	size_t bst_pitch_in_bytes;
 
 	// Bookkeeping vars
 	UInt iteration_num;
 	UInt update_period;
 };
 
+
+// TODO: This could be done via parallel and distributed matrix multiplication.
 __device__
 void calculateOverlap(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
-{
-    int tx = threadIdx.x;
-	int inX = blockDim.x*blockIdx.x + tx;
-	Real boostFactor = boosts_dev[inX];
+{ 
+	int tx = threadIdx.x;
+   	int inX = blockDim.x*blockIdx.x + tx;
     olaps_sh[tx] = 0;
+	// TODO: This reading from global memory is inefficient. Maybe need more efficient data structures to fit into shared memory?
     for(int i=0; i < numPot_dev[inX]; i++)
     {
-		int in_idx = pot_dev[tx*MAX_CONNECTED+i];
-		if(input[inBlockSize*blockIdx.x + in_idx] && per_dev[tx*MAX_CONNECTED+i] >= threshold)
-        	olaps_sh[tx] += boostFactor;
+		// Index of block-specific input
+		UInt in_idx = pot_dev[inX*MAX_CONNECTED+i];
+		if(input[inBlockSize*blockIdx.x + in_idx] && per_dev[inX*MAX_CONNECTED+i] >= threshold)
+        	olaps_sh[tx] += boosts_dev[inX+i];
     }
 }
 
@@ -186,13 +191,19 @@ void compute(args* ar_ptr)
 
 	adaptSynapses(ar.in_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 	
-	__syncthreads();
+	/* Dependencies:
+	   adaptSynapses, updateDutyCycles, averageActivity - independent
+	   updateDutyCycles->updateBoosts
+	   updateDutyCycles->updateMinOdc
+	   updateDutyCycles->bumpUp
+	   updateBoosts, updateMinOdc, bumpUp - independent
 
-	// TODO: adaptSynapses, (updateDutyCycles, bumpUp, updateMinOdc) and (averageActivity, updateBoosts) can run independently in parallel.
+	   calculateOverlap->inhibit->(adaptSynapses, averageActivity), updateDutyCycles->(updateBoosts, updateMinOdc, bumpUp)
+
+       TODO: Separate subroutines into 5 semi-dependent cuda streams.
+	*/
 
 	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
-
-	__syncthreads();
 
 	averageActivity(active_sh, avg_act);
 
@@ -204,4 +215,19 @@ void compute(args* ar_ptr)
 
 	if(ar.iteration_num % ar.update_period == 0)
 		updateMinOdc(ar.odc_dev, ar.minOdc, ar.minPctOdc, ar.SP_SIZE);
+}
+
+
+
+
+__global__
+void calculateOverlap_wrapper(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE)
+{
+	extern __shared__ UInt shared[];
+	UInt* olaps_sh = &shared[0];
+
+	calculateOverlap(input, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, threshold, inBlockSize, MAX_CONNECTED);
+
+	if(blockDim.x*blockIdx.x+threadIdx.x < SP_SIZE)
+		olaps_dev[blockDim.x*blockIdx.x+threadIdx.x] = olaps_sh[threadIdx.x];
 }

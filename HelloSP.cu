@@ -12,7 +12,7 @@
 using namespace std;
 
 typedef unsigned int UInt;
-typedef double Real;
+typedef float Real;
 
 UInt* generatePotentialPools(int cols, const UInt IN_BLOCK_SIZE, Real potentialPct, const UInt MAX_CONNECTED, UInt* numPotential)
 {
@@ -130,8 +130,8 @@ void printErrorMessage(cudaError_t error, int memorySize){
 
 int main(int argc, const char * argv[])
 {
-    const UInt DIM_SP = 256;
-    const UInt DIM_INPUT = 512;
+    const UInt DIM_SP = 1024;
+    const UInt DIM_INPUT = 1024;
     const UInt DIM_BLOCK = 16; // dimensions of cuda block
     const UInt IN_DIM_BLOCK = DIM_INPUT/(DIM_SP/DIM_BLOCK); // Dimension of chunk of input processed by a single cuda block
     const UInt MAX_CONNECTED = IN_DIM_BLOCK*IN_DIM_BLOCK/4; // A hard limit o # of conn. input bits / column
@@ -181,12 +181,12 @@ int main(int argc, const char * argv[])
 	bool* in_host = new bool[IN_SIZE];
     UInt* potentialPools;
 	Real* permanences;
-	Real* boosts = new Real[SP_SIZE];
+	Real* boosts = new Real[SP_SIZE*MAX_CONNECTED];
 	UInt* numPotential = new UInt[SP_SIZE];
 	UInt* numConnected = new UInt[SP_SIZE];
 
 	// Host memory allocation	
-	std::fill_n(boosts, SP_SIZE, 1);
+	std::fill_n(boosts, SP_SIZE*MAX_CONNECTED, 1);
 	std::fill_n(numPotential, SP_SIZE, 0);
 	std::fill_n(numConnected, SP_SIZE, 0);
 
@@ -202,25 +202,23 @@ int main(int argc, const char * argv[])
     cudaError_t result;
     result = cudaMalloc((void **) &ar_dev, sizeof(ar)); if(result) printErrorMessage(result, 0);
     result = cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
-    result = cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
     result = cudaMalloc((void **) &ar.cols_dev, SP_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
-	result = cudaMalloc((void **) &ar.boosts_dev, SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0);
 	result = cudaMalloc((void **) &ar.numPot_dev, SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0);
     result = cudaMallocPitch((void **) &ar.pot_dev, &ar.pot_pitch_in_bytes, MAX_CONNECTED*sizeof(UInt), SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0); // width, height, x, y 
     result = cudaMallocPitch((void **) &ar.per_dev, &ar.per_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
     result = cudaMallocPitch((void **) &ar.odc_dev, &ar.odc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
     result = cudaMallocPitch((void **) &ar.adc_dev, &ar.adc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMallocPitch((void **) &ar.boosts_dev, &ar.bst_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
 
 	// Memcpy to device
     result = cudaMemcpy(ar_dev, &ar, sizeof(ar), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    result = cudaMemcpy(ar.boosts_dev, boosts, SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy(ar.numPot_dev, numPotential, SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy2D(ar.pot_dev, ar.pot_pitch_in_bytes, potentialPools, MAX_CONNECTED*sizeof(UInt), MAX_CONNECTED*sizeof(UInt), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy2D(ar.per_dev, ar.per_pitch_in_bytes, permanences, MAX_CONNECTED*sizeof(Real), MAX_CONNECTED*sizeof(Real), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy2D(ar.boosts_dev, ar.bst_pitch_in_bytes, boosts, MAX_CONNECTED*sizeof(Real), MAX_CONNECTED*sizeof(Real), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 
 	// Kernel call
-	// TODO: Only pointer to args in global memory should be passed in
     compute<<<grid_dm, block_dm, sm>>>(ar_dev);
 
     // Memcpy from device
