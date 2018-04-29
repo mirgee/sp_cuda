@@ -96,15 +96,16 @@ __device__
 void adaptSynapses(bool* input, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool active, const UInt inBlockSize, const UInt MAX_CONNECTED)
 {
     int tx = threadIdx.x;
+   	int inX = blockDim.x*blockIdx.x + tx;
 	if(active)
 	{
 		for(int i=0; i < MAX_CONNECTED; i++)
     	{
-			int in_idx = pot_dev[tx*MAX_CONNECTED+i];
+			int in_idx = pot_dev[inX*MAX_CONNECTED+i];
 			if(input[inBlockSize*blockIdx.x + in_idx])
-				per_dev[tx*MAX_CONNECTED+i] += synPermActiveInc;
+				per_dev[inX*MAX_CONNECTED+i] += synPermActiveInc;
 			else
-				per_dev[tx*MAX_CONNECTED+i] -= synPermInactiveDec;
+				per_dev[inX*MAX_CONNECTED+i] -= synPermInactiveDec;
     	}
 	}
 }
@@ -248,4 +249,15 @@ void inhibitColumns_wrapper(UInt* olaps_dev, bool* cols_dev, Real localAreaDensi
 	__syncthreads();
 
 	inhibitColumns(olaps_sh, cols_dev, active_sh, active, localAreaDensity);
+}
+
+__global__
+void adaptSynapses_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool* active_arr, const UInt IN_BLOCK_SIZE, const UInt MAX_CONNECTED, const UInt SP_SIZE)
+{
+	int inX = blockIdx.x*blockDim.x + threadIdx.x;
+	if(inX < SP_SIZE)
+	{
+		bool active = active_arr[inX];
+		adaptSynapses(in_dev, pot_dev, per_dev, synPermActiveInc, synPermInactiveDec, active, IN_BLOCK_SIZE, MAX_CONNECTED);
+	}
 }
