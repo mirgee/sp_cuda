@@ -241,16 +241,14 @@ int main(int argc, const char * argv[])
     result = cudaMemcpy(ar.boosts_dev, boosts, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 
 	// Kernel call
-    // compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev);
-
-	cudaStream_t stream1, stream2, stream3, stream4, stream5;
-	cudaStreamCreate(&stream1); cudaStreamCreate(&stream2); cudaStreamCreate(&stream3); cudaStreamCreate(&stream4); cudaStreamCreate(&stream5);
+	cudaStream_t stream1, stream2, stream3; //, stream4;
+	cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking); cudaStreamCreateWithFlags(&stream2, cudaStreamNonBlocking); cudaStreamCreateWithFlags(&stream3, cudaStreamNonBlocking); // cudaStreamCreateWithFlags(&stream4, cudaStreamNonBlocking);
 
 	// calculateOverlap<<<NUM_BLOCKS, BLOCK_SIZE, sm, stream1>>>(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 	// inhibitColumns<<<NUM_BLOCKS, BLOCK_SIZE, sm, stream1>>>(olaps_sh, ar.cols_dev, ar.localAreaDensity);
 	overlap_inhibit<<<NUM_BLOCKS, BLOCK_SIZE, sm, stream1>>>(ar_dev);
 
-	cudaStreamSynchronize(stream1);
+	cudaDeviceSynchronize();
 
 	adaptSynapses<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream1>>>(ar.in_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, ar.cols_dev, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);	
 
@@ -258,11 +256,11 @@ int main(int argc, const char * argv[])
 
 	updateDutyCycles<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream3>>>(ar.odc_dev, ar.adc_dev, ar.olaps_dev, ar.cols_dev, ar.iteration_num, ar.dutyCyclePeriod);
 
-	cudaStreamSynchronize(stream3);
+	cudaDeviceSynchronize();
 
-	updateBoosts<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream3>>>(ar.adc_dev, ar.boosts_dev, ar.avg_act_dev, ar.boostStrength);
+	updateBoosts<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream1>>>(ar.adc_dev, ar.boosts_dev, ar.avg_act_dev, ar.boostStrength);
 
-	bumpUpColumnsWithWeakOdc<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream4>>>(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
+	bumpUpColumnsWithWeakOdc<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream2>>>(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
 
     // Memcpy from device
     result = cudaMemcpy(cols_host, ar.cols_dev, SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0); 
