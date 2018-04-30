@@ -155,11 +155,11 @@ void printErrorMessage(cudaError_t error, int memorySize){
 
 int main(int argc, const char * argv[])
 {
-	const UInt SP_SIZE = 1024;
-	const UInt IN_SIZE = 2048;
+	const UInt SP_SIZE = 1048576;
+	const UInt IN_SIZE = 2097152;
 	const UInt BLOCK_SIZE = 64; // Two warps
-	const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE; // 16
-	const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // 128 Size of chunk of input processed by a single cuda block
+	const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
+	const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
 	const UInt MAX_CONNECTED = 16;
     const Real IN_DENSITY = 0.5; // Density of input connections
     srand(time(NULL));
@@ -169,7 +169,7 @@ int main(int argc, const char * argv[])
     // TODO: Compute the mem. requirements, allocate proper amount
 	// input chunk, overlaps, connected, boost factors
 	// size_t sm = (IN_BLOCK_SIZE)*sizeof(bool) + (2*BLOCK_SIZE)*sizeof(UInt) + (BLOCK_SIZE)*sizeof(Real);
-	size_t sm = BLOCK_SIZE*(sizeof(bool) + sizeof(UInt));
+	size_t sm = BLOCK_SIZE*sizeof(UInt);
 
     // construct input args
     args ar;
@@ -213,7 +213,7 @@ int main(int argc, const char * argv[])
 					BLOCK_SIZE, IN_BLOCK_SIZE);
 	generate01(in_host, IN_SIZE, IN_DENSITY);
 
-	visualize_input(in_host, potentialPools, permanences, numPotential, IN_SIZE, SP_SIZE, IN_BLOCK_SIZE, MAX_CONNECTED);
+	// visualize_input(in_host, potentialPools, permanences, numPotential, IN_SIZE, SP_SIZE, IN_BLOCK_SIZE, MAX_CONNECTED);
 
 	// Global memory pointers
 	args* ar_dev;
@@ -230,6 +230,7 @@ int main(int argc, const char * argv[])
     result = cudaMalloc((void **) &ar.odc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
     result = cudaMalloc((void **) &ar.adc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
     result = cudaMalloc((void **) &ar.boosts_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMalloc((void **) &ar.avg_act_dev, SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
 
 	// Memcpy to device
     result = cudaMemcpy(ar_dev, &ar, sizeof(ar), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
@@ -240,7 +241,28 @@ int main(int argc, const char * argv[])
     result = cudaMemcpy(ar.boosts_dev, boosts, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 
 	// Kernel call
-    compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev);
+    // compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev);
+
+	cudaStream_t stream1, stream2, stream3, stream4, stream5;
+	cudaStreamCreate(&stream1); cudaStreamCreate(&stream2); cudaStreamCreate(&stream3); cudaStreamCreate(&stream4); cudaStreamCreate(&stream5);
+
+	// calculateOverlap<<<NUM_BLOCKS, BLOCK_SIZE, sm, stream1>>>(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+	// inhibitColumns<<<NUM_BLOCKS, BLOCK_SIZE, sm, stream1>>>(olaps_sh, ar.cols_dev, ar.localAreaDensity);
+	overlap_inhibit<<<NUM_BLOCKS, BLOCK_SIZE, sm, stream1>>>(ar_dev);
+
+	cudaStreamSynchronize(stream1);
+
+	adaptSynapses<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream1>>>(ar.in_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, ar.cols_dev, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);	
+
+	averageActivity<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream2>>>(ar.cols_dev, ar.avg_act_dev);
+
+	updateDutyCycles<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream3>>>(ar.odc_dev, ar.adc_dev, ar.olaps_dev, ar.cols_dev, ar.iteration_num, ar.dutyCyclePeriod);
+
+	cudaStreamSynchronize(stream3);
+
+	updateBoosts<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream3>>>(ar.adc_dev, ar.boosts_dev, ar.avg_act_dev, ar.boostStrength);
+
+	bumpUpColumnsWithWeakOdc<<<NUM_BLOCKS, BLOCK_SIZE, 0, stream4>>>(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
 
     // Memcpy from device
     result = cudaMemcpy(cols_host, ar.cols_dev, SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0); 
