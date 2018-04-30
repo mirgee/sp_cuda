@@ -37,13 +37,13 @@ UInt* generatePotentialPools(int cols, const UInt IN_BLOCK_SIZE, Real potentialP
 Real initPermanencesConnected(Real synPermConnected_, Real synPermMax_)
 {
 	Real p = synPermConnected_ +
-	             (synPermMax_ - synPermConnected_)*(Real)((rand()%100)/100);
+	             (synPermMax_ - synPermConnected_)*((Real)((rand()%100))/100);
 	return p;
 }
 
 Real initPermanencesNotConnected(Real synPermConnected_)
 {
-	Real p = synPermConnected_ * (Real)((rand()%100)/100);
+	Real p = synPermConnected_ * (Real)((rand()%100))/100;
 	return p;
 }
 
@@ -123,6 +123,30 @@ void generate01(bool* ar, size_t size, Real inDensity)
 	}
 }
 
+void visualize_input(bool* in_host, UInt* potentialPools, Real* permanences, UInt* numPotential, const UInt IN_SIZE, const UInt SP_SIZE, const UInt IN_BLOCK_SIZE, const UInt MAX_CONNECTED)
+{
+	printf("POTENTIAL CONNECTIONS WITH PERMANENCES\n");
+	for(int i=0; i<SP_SIZE; i++)
+	{
+		for(int j=0; j<MAX_CONNECTED; j++)
+			printf("%d \t", potentialPools[i*MAX_CONNECTED+j]);
+		printf("\n");
+		for(int j=0; j<numPotential[i]; j++)
+			printf("%.2f\t", permanences[i*MAX_CONNECTED+j]);
+		printf("\n");
+		printf("%d \n", numPotential[i]);
+	}
+
+	printf("INPUT SDR\n");
+	for(int i=0; i<IN_SIZE; i++)
+	{
+		printf("%d ", in_host[i]);
+		if(i % IN_BLOCK_SIZE == 0 && i > 0)
+			printf("\n");
+	}
+	printf("\n");
+}
+
 void printErrorMessage(cudaError_t error, int memorySize){
     printf("==================================================\n");
     printf("MEMORY ERROR  : %s\n", cudaGetErrorString(error));
@@ -151,7 +175,7 @@ int main(int argc, const char * argv[])
     args ar;
 	ar.iteration_num=0;
 	ar.learn=true;
-	ar.localAreaDensity=0.3; // SP density after inhibition
+	ar.localAreaDensity=0.02; // SP density after inhibition
     ar.potentialPct=0.5; // 
     ar.connectedPct=0.5;
     ar.stimulusThreshold=0;
@@ -189,15 +213,7 @@ int main(int argc, const char * argv[])
 					BLOCK_SIZE, IN_BLOCK_SIZE);
 	generate01(in_host, IN_SIZE, IN_DENSITY);
 
-	
-	for(int i=0; i<SP_SIZE; i++)
-	{
-		for(int j=0; j<MAX_CONNECTED; j++)
-			printf("%d, ", potentialPools[i*MAX_CONNECTED+j]);
-		printf("\n");
-		printf("%d \n", numPotential[i]);
-	}
-
+	visualize_input(in_host, potentialPools, permanences, numPotential, IN_SIZE, SP_SIZE, IN_BLOCK_SIZE, MAX_CONNECTED);
 
 	// Global memory pointers
 	args* ar_dev;
@@ -229,6 +245,8 @@ int main(int argc, const char * argv[])
     // Memcpy from device
     result = cudaMemcpy(cols_host, ar.cols_dev, SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0); 
 
+
+	// The final sparsity will approach target with increasing block size
 	int ones = 0;
 	for(int i=0; i < SP_SIZE; i++)
 		if(cols_host[i] > 0) ones++;

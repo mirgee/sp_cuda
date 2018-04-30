@@ -284,6 +284,6 @@ void testAdaptSynapses()
 int main(int argc, const char * argv[])
 {
 	testCalculateOverlap();
-	// testInhibitColumns();
-	// testAdaptSynapses();
+	testInhibitColumns();
+	testAdaptSynapses();
 }

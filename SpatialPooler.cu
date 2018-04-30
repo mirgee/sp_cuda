@@ -68,7 +68,6 @@ void calculateOverlap(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_de
 		if(input[inBlockSize*blockIdx.x + in_idx])
 				if(per_dev[inX*MAX_CONNECTED+i] >= threshold)
         			olaps_sh[tx] += boosts_dev[inX+i];
-		// printf("%d\n", in_idx);
     }
 }
 
