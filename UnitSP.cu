@@ -182,6 +182,8 @@ void testInhibitColumns()
     result = cudaMemcpy(actual_active, cols_dev, BLOCK_SIZE*sizeof(bool), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0);
 
 	assert(compare(correct_active, actual_active, BLOCK_SIZE));
+
+	cudaFree(cols_dev); cudaFree(olaps_dev);
 }
 
 void testAdaptSynapses()
@@ -281,7 +283,7 @@ void testAdaptSynapses()
 
 int main(int argc, const char * argv[])
 {
-	// testCalculateOverlap();
+	testCalculateOverlap();
 	// testInhibitColumns();
-	testAdaptSynapses();
+	// testAdaptSynapses();
 }

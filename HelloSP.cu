@@ -24,12 +24,12 @@ UInt* generatePotentialPools(int cols, const UInt IN_BLOCK_SIZE, Real potentialP
 		// Generated indeces should be in (0,IN_BLOCK_SIZE) and their count should be <= MAX_CONNECTED and around potentialPct*IN_BLOCK_SIZE
         for(int j=0; j < IN_BLOCK_SIZE; j++)
         {
-            if((Real)(rand()%100)/100 <= potentialPct && connected <= MAX_CONNECTED)
+            if((Real)(rand()%100)/100 <= potentialPct && connected < MAX_CONNECTED)
             {
-                potentialPools[i*MAX_CONNECTED + connected++] = j;
-                numPotential[i]++;
+                potentialPools[i*MAX_CONNECTED + connected++] = j; 
             }
         }
+		numPotential[i] = connected;
     }
     return potentialPools;
 }
@@ -61,7 +61,8 @@ Real* generatePermanences(int cols, int inputSize, UInt* potential, Real connect
 		connected = 0;
 		// We need to only go through the input block corresponding to the current column
 		// This means we need to convert current column to the input block number
-		curr_block = i % BLOCK_SIZE;
+		curr_block = floor(i / BLOCK_SIZE);
+		// j is the global index of connection in the input matrix
 		for(int j=curr_block*IN_BLOCK_SIZE; j < curr_block*IN_BLOCK_SIZE + IN_BLOCK_SIZE; j++)
 		{
 			// Find if this input is potentially connected with this column
@@ -130,22 +131,14 @@ void printErrorMessage(cudaError_t error, int memorySize){
 
 int main(int argc, const char * argv[])
 {
-    const UInt DIM_SP = 1024;
-    const UInt DIM_INPUT = 1024;
-    const UInt DIM_BLOCK = 16; // dimensions of cuda block
-    const UInt IN_DIM_BLOCK = DIM_INPUT/(DIM_SP/DIM_BLOCK); // Dimension of chunk of input processed by a single cuda block
-    const UInt MAX_CONNECTED = IN_DIM_BLOCK*IN_DIM_BLOCK/4; // A hard limit o # of conn. input bits / column
-    const Real IN_DENSITY = 0.5;
-
-	const UInt SP_SIZE = DIM_SP * DIM_SP;
-	const UInt IN_SIZE = DIM_INPUT * DIM_INPUT;
-	const UInt BLOCK_SIZE = DIM_BLOCK * DIM_BLOCK;
-	const UInt IN_BLOCK_SIZE = IN_DIM_BLOCK * IN_DIM_BLOCK;
+	const UInt SP_SIZE = 1024;
+	const UInt IN_SIZE = 2048;
+	const UInt BLOCK_SIZE = 64; // Two warps
+	const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE; // 16
+	const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // 128 Size of chunk of input processed by a single cuda block
+	const UInt MAX_CONNECTED = 16;
+    const Real IN_DENSITY = 0.5; // Density of input connections
     srand(time(NULL));
-
-    dim3 grid_dm(DIM_SP/DIM_BLOCK * DIM_SP/DIM_BLOCK, 1, 1);
-    dim3 block_dm(DIM_BLOCK*DIM_BLOCK, 1, 1);
-
 
 	// Shared mem.: permanences, potential conn., active/overlap duty cycles, active cols - copied from global
 	// 				overlaps, connected counts, boost factors + their mins (using active d.c.) - computed locally
@@ -158,8 +151,8 @@ int main(int argc, const char * argv[])
     args ar;
 	ar.iteration_num=0;
 	ar.learn=true;
-	ar.localAreaDensity=0.3;
-    ar.potentialPct=0.5;
+	ar.localAreaDensity=0.3; // SP density after inhibition
+    ar.potentialPct=0.5; // 
     ar.connectedPct=0.5;
     ar.stimulusThreshold=0;
     ar.synPermTrimThreshold=0.025;
@@ -196,31 +189,42 @@ int main(int argc, const char * argv[])
 					BLOCK_SIZE, IN_BLOCK_SIZE);
 	generate01(in_host, IN_SIZE, IN_DENSITY);
 
+	
+	for(int i=0; i<SP_SIZE; i++)
+	{
+		for(int j=0; j<MAX_CONNECTED; j++)
+			printf("%d, ", potentialPools[i*MAX_CONNECTED+j]);
+		printf("\n");
+		printf("%d \n", numPotential[i]);
+	}
+
+
 	// Global memory pointers
 	args* ar_dev;
 
 	// Global memory allocation
-    cudaError_t result;
+	cudaError_t result;
     result = cudaMalloc((void **) &ar_dev, sizeof(ar)); if(result) printErrorMessage(result, 0);
     result = cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
+    result = cudaMalloc((void **) &ar.olaps_dev, SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0);
     result = cudaMalloc((void **) &ar.cols_dev, SP_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
 	result = cudaMalloc((void **) &ar.numPot_dev, SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0);
-    result = cudaMallocPitch((void **) &ar.pot_dev, &ar.pot_pitch_in_bytes, MAX_CONNECTED*sizeof(UInt), SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0); // width, height, x, y 
-    result = cudaMallocPitch((void **) &ar.per_dev, &ar.per_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
-    result = cudaMallocPitch((void **) &ar.odc_dev, &ar.odc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
-    result = cudaMallocPitch((void **) &ar.adc_dev, &ar.adc_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
-    result = cudaMallocPitch((void **) &ar.boosts_dev, &ar.bst_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMalloc((void **) &ar.pot_dev, MAX_CONNECTED*SP_SIZE*sizeof(UInt)); if(result) printErrorMessage(result, 0); // width, height, x, y 
+    result = cudaMalloc((void **) &ar.per_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMalloc((void **) &ar.odc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMalloc((void **) &ar.adc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMalloc((void **) &ar.boosts_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
 
 	// Memcpy to device
     result = cudaMemcpy(ar_dev, &ar, sizeof(ar), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy(ar.numPot_dev, numPotential, SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    result = cudaMemcpy2D(ar.pot_dev, ar.pot_pitch_in_bytes, potentialPools, MAX_CONNECTED*sizeof(UInt), MAX_CONNECTED*sizeof(UInt), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    result = cudaMemcpy2D(ar.per_dev, ar.per_pitch_in_bytes, permanences, MAX_CONNECTED*sizeof(Real), MAX_CONNECTED*sizeof(Real), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    result = cudaMemcpy2D(ar.boosts_dev, ar.bst_pitch_in_bytes, boosts, MAX_CONNECTED*sizeof(Real), MAX_CONNECTED*sizeof(Real), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy(ar.pot_dev, potentialPools, MAX_CONNECTED*SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy(ar.per_dev, permanences, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy(ar.boosts_dev, boosts, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 
 	// Kernel call
-    compute<<<grid_dm, block_dm, sm>>>(ar_dev);
+    compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev);
 
     // Memcpy from device
     result = cudaMemcpy(cols_host, ar.cols_dev, SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0); 
