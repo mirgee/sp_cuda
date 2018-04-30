@@ -178,9 +178,6 @@ void compute(args* ar_ptr)
 	UInt* olaps_sh = &shared[0];
 	bool* active_sh = (bool*)&shared[blockDim.x];
 
-	// TODO: Decide on what to copy to local memory. 
-	// TODO: When do we need to synchronize threads?
-
 	calculateOverlap(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
 	__syncthreads();
@@ -189,21 +186,7 @@ void compute(args* ar_ptr)
 	
 	__syncthreads();
 
-	// printf(" %d ", olaps_sh[tx]);
-
 	adaptSynapses(ar.in_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
-	
-	/* Dependencies:
-	   adaptSynapses, updateDutyCycles, averageActivity - independent
-	   updateDutyCycles->updateBoosts
-	   updateDutyCycles->updateMinOdc
-	   updateDutyCycles->bumpUp
-	   updateBoosts, updateMinOdc, bumpUp - independent
-
-	   calculateOverlap->inhibit->(adaptSynapses, averageActivity), updateDutyCycles->(updateBoosts, updateMinOdc, bumpUp)
-
-       TODO: Separate subroutines into 5 semi-dependent cuda streams.
-	*/
 
 	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
@@ -218,9 +201,6 @@ void compute(args* ar_ptr)
 	if(ar.iteration_num % ar.update_period == 0)
 		updateMinOdc(ar.odc_dev, ar.minOdc, ar.minPctOdc, ar.SP_SIZE);
 }
-
-
-
 
 __global__
 void calculateOverlap_wrapper(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE)
