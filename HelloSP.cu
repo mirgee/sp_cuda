@@ -155,8 +155,8 @@ void printErrorMessage(cudaError_t error, int memorySize){
 
 int main(int argc, const char * argv[])
 {
-	const UInt SP_SIZE = 1024;
-	const UInt IN_SIZE = 2048;
+	const UInt SP_SIZE = 65536;
+	const UInt IN_SIZE = 131072;
 	const UInt BLOCK_SIZE = 64; // Two warps
 	const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE; // 16
 	const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // 128 Size of chunk of input processed by a single cuda block
