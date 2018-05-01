@@ -21,7 +21,6 @@ struct args
 	Real synPermBelowStimulusInc;
 	UInt dutyCyclePeriod;
 	Real boostStrength;
-	Real minOdc;
 	Real minPctOdc;
 	bool learn;
 
@@ -35,6 +34,7 @@ struct args
 	Real* odc_dev; // odc serve to maintain same act. freq. for each col. (per block)
 	Real* adc_dev; // adc serve to compute boost factors
 	UInt* numPot_dev;
+	Real* minOdc_dev; // Stores minumum overlap duty cycles per block 
 
 	// Constants
 	UInt SP_SIZE;
@@ -194,26 +194,83 @@ void updateBoosts(Real* adc_dev, Real* boosts_dev, Real targetDensity, Real boos
 }
 
 __device__
-void bumpUpColumnsWithWeakOdc(Real* odc_dev, Real* per_dev, UInt* numPot, Real minOdc, Real synPermBelowStimulusInc, const UInt MAX_CONNECTED)
+void bumpUpColumnsWithWeakOdc(Real* odc_dev, Real* per_dev, UInt* numPot, Real* minOdc_dev, Real synPermBelowStimulusInc, const UInt MAX_CONNECTED)
 {
 	int tx = threadIdx.x;
     int inX = blockIdx.x*blockDim.x+tx;
 
-	if(odc_dev[inX] < minOdc) {
+	if(odc_dev[inX] < minOdc_dev[blockIdx.x]) {
 		for(int i=0; i<numPot[inX]; i++)
 			per_dev[tx*MAX_CONNECTED+i] += synPermBelowStimulusInc;
 	}
 }
 
-// TODO: This can be done via reduction.
 __device__
-void updateMinOdc(Real* odc_dev, Real &minOdc, Real minPctOdc, const UInt SP_SIZE)
+void updateMinOdc(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real minPctOdc, const UInt SP_SIZE)
 {
 	Real maxOdc = 0;
 	for(int i=0; i<SP_SIZE; i++)
 		maxOdc = odc_dev[i] > maxOdc ? odc_dev[i] : maxOdc;
-	minOdc = minPctOdc * maxOdc;
+	if(threadIdx.x == 0)
+		minOdc_dev[blockIdx.x] = minPctOdc * maxOdc;
 }
+
+// This is close to duplicate code, could be solved by lambda expressions, which are avail.
+// only in > 7.5
+__device__
+void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real minPctOdc, const UInt SP_SIZE)
+{
+	int tx = threadIdx.x;
+	int inX = blockDim.x*blockIdx.x + threadIdx.x;
+	UInt BLOCK_SIZE = blockDim.x;
+
+	odc_sh[tx] = odc_dev[inX];
+	
+	if(BLOCK_SIZE >= 512)
+	{ 
+		if(tx < 256) 
+		{ 
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+256]); 
+		} 
+		__syncthreads(); 
+	}
+    if(BLOCK_SIZE >= 256)
+   	{ 
+		if(tx < 128) 
+		{ 
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+128]); 
+		} 
+		__syncthreads(); 
+	}
+    if(BLOCK_SIZE >= 128)
+   	{ 
+		if(tx < 64) 
+		{ 
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+64]); 
+		} 
+		__syncthreads(); 
+	}
+
+    if(tx < 32) 
+    {
+        if(BLOCK_SIZE >= 64) 
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+32]);
+        if(BLOCK_SIZE >= 32) 
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+16]);
+        if(BLOCK_SIZE >= 16) 
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+8]);
+        if(BLOCK_SIZE >= 8) 
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+4]);
+        if(BLOCK_SIZE >= 4)
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+2]);
+        if(BLOCK_SIZE >= 2) 
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+1]);
+    }
+
+	if(threadIdx.x == 0)
+		minOdc_dev[blockIdx.x] = minPctOdc * odc_sh[0];
+}
+
 
 __global__
 void compute(args* ar_ptr)
@@ -229,6 +286,7 @@ void compute(args* ar_ptr)
     extern __shared__ UInt shared[];
 	UInt* olaps_sh = &shared[0];
 	Real* active_sh = (Real*)&shared[blockDim.x];
+	Real* odc_sh = &active_sh[blockDim.x];
 
 	calculateOverlap(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
@@ -249,10 +307,10 @@ void compute(args* ar_ptr)
 
 	updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
 
-	bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
+	bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
 
 	if(ar.iteration_num % ar.update_period == 0)
-		updateMinOdc(ar.odc_dev, ar.minOdc, ar.minPctOdc, ar.SP_SIZE);
+		updateMinOdc(ar.odc_dev, odc_sh, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
 }
 
 __global__
