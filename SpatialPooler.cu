@@ -241,3 +241,21 @@ void adaptSynapses_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synP
 		adaptSynapses(in_dev, pot_dev, per_dev, synPermActiveInc, synPermInactiveDec, active, IN_BLOCK_SIZE, MAX_CONNECTED);
 	}
 }
+
+__global__
+void averageActivity_wrapper(bool* cols_dev, Real* avg_dev)
+{
+	extern __shared__ UInt shared[];
+	bool* active_sh = (bool*) &shared[0];
+
+	Real thread_avg = 0;
+
+	active_sh[threadIdx.x] = cols_dev[threadIdx.x];
+
+	averageActivity(active_sh, thread_avg);
+
+	if(threadIdx.x == 0)
+		*avg_dev = thread_avg;	
+
+	__syncthreads();
+}

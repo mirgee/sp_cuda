@@ -279,6 +279,32 @@ void testAdaptSynapses()
     result = cudaMemcpy(permanences, ar.per_dev, SP_SIZE*MAX_CONNECTED*sizeof(Real), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0);
 
 	assert(compare(adapted_permanences, permanences, SP_SIZE*MAX_CONNECTED));
+	
+	free_memory(ar);
+}
+
+void testAverageActivity()
+{
+	const UInt BLOCK_SIZE = 16;
+	bool active[BLOCK_SIZE] = { 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+	bool* cols_dev;
+	Real* avg_dev;
+	Real avg_host = 0;
+	
+    cudaError_t result = cudaMalloc((void **) &cols_dev, BLOCK_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
+    result = cudaMalloc((void **) &avg_dev, sizeof(Real)); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy(cols_dev, active, BLOCK_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+
+	averageActivity_wrapper<<<1, BLOCK_SIZE, BLOCK_SIZE*sizeof(UInt)>>>(cols_dev, avg_dev);
+
+
+    result = cudaMemcpy(&avg_host, avg_dev, sizeof(Real), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0);
+
+	printf("%f\n", avg_host);
+	assert(avg_host == 0.25);
+
+	cudaFree(cols_dev); cudaFree(avg_dev);
 }
 
 int main(int argc, const char * argv[])
@@ -286,4 +312,5 @@ int main(int argc, const char * argv[])
 	testCalculateOverlap();
 	testInhibitColumns();
 	testAdaptSynapses();
+	testAverageActivity();
 }
