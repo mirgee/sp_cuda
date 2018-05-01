@@ -73,7 +73,7 @@ void calculateOverlap(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_de
 
 // TODO: This could be done via parallel sorting.
 __device__
-void inhibitColumns(UInt* olaps_sh, bool* cols_dev, bool* active_sh, bool &active, Real sparsity)
+void inhibitColumns(UInt* olaps_sh, bool* cols_dev, Real* active_sh, bool &active, Real sparsity)
 {
     int tx = threadIdx.x;
 	int numLarger = 0;
@@ -122,16 +122,68 @@ void updateDutyCycles(Real* odc_dev, Real* adc_dev, UInt* olaps_sh, bool active,
 	adc_dev[blockDim.x*blockIdx.x+tx] = (odc_dev[blockDim.x*blockIdx.x+tx]*(period-1) + (Real)active) / period;
 }
 
-// TODO: This can be done via reduction.
 __device__
-void averageActivity(bool* active_sh, Real &avg)
+void averageActivity(Real* active_sh)
 {
-	avg = 0;
+	Real avg = 0;
 	for(int i=0; i < blockDim.x; i++)
 	{
-		avg += (Real)active_sh[i];
+		avg += active_sh[i];
 	}
-	avg /= (Real)blockDim.x;
+	active_sh[threadIdx.x] = avg / (Real)blockDim.x;
+}
+
+__device__
+void averageActivityReduction(Real* active_sh)
+{
+	int tx = threadIdx.x;
+	UInt BLOCK_SIZE = blockDim.x;
+	
+	if(BLOCK_SIZE >= 512)
+	{ 
+		if(tx < 256) 
+		{ 
+			active_sh[tx] += active_sh[tx+256]; 
+		} 
+		__syncthreads(); 
+	}
+    if(BLOCK_SIZE >= 256)
+   	{ 
+		if(tx < 128) 
+		{ 
+			active_sh[tx] += active_sh[tx+128]; 
+		} 
+		__syncthreads(); 
+	}
+    if(BLOCK_SIZE >= 128)
+   	{ 
+		if(tx < 64) 
+		{ 
+			active_sh[tx] += active_sh[tx+64]; 
+		} 
+		__syncthreads(); 
+	}
+
+    if(tx < 32) 
+    {
+        if(BLOCK_SIZE >= 64) 
+			active_sh[tx] += active_sh[tx+32];
+        if(BLOCK_SIZE >= 32) 
+			active_sh[tx] += active_sh[tx+16];
+        if(BLOCK_SIZE >= 16) 
+			active_sh[tx] += active_sh[tx+8];
+        if(BLOCK_SIZE >= 8) 
+			active_sh[tx] += active_sh[tx+4];
+        if(BLOCK_SIZE >= 4)
+			active_sh[tx] += active_sh[tx+2];
+        if(BLOCK_SIZE >= 2) 
+			active_sh[tx] += active_sh[tx+1];
+    }
+
+	__syncthreads();
+
+	// According to https://devblogs.nvidia.com/using-shared-memory-cuda-cc/, this should result in a broadcast
+    active_sh[tx] = active_sh[0] / BLOCK_SIZE;
 }
 
 __device__
@@ -176,7 +228,7 @@ void compute(args* ar_ptr)
 
     extern __shared__ UInt shared[];
 	UInt* olaps_sh = &shared[0];
-	bool* active_sh = (bool*)&shared[blockDim.x];
+	Real* active_sh = (Real*)&shared[blockDim.x];
 
 	calculateOverlap(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
@@ -190,7 +242,8 @@ void compute(args* ar_ptr)
 
 	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
-	averageActivity(active_sh, avg_act);
+	// active_sh will hold average activity per block for each column
+	averageActivityReduction(active_sh);
 
 	__syncthreads();
 
@@ -220,7 +273,7 @@ void inhibitColumns_wrapper(UInt* olaps_dev, bool* cols_dev, Real localAreaDensi
 {
 	extern __shared__ UInt shared[];
 	UInt* olaps_sh = &shared[0];
-	bool* active_sh = (bool*) &olaps_sh[BLOCK_SIZE];
+	Real* active_sh = (Real*) &olaps_sh[BLOCK_SIZE];
 
 	olaps_sh[threadIdx.x] = olaps_dev[threadIdx.x];
 
@@ -245,17 +298,14 @@ void adaptSynapses_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synP
 __global__
 void averageActivity_wrapper(bool* cols_dev, Real* avg_dev)
 {
+	int tx = threadIdx.x;
+
 	extern __shared__ UInt shared[];
-	bool* active_sh = (bool*) &shared[0];
+	Real* active_sh = (Real*) &shared[0];
 
-	Real thread_avg = 0;
+	active_sh[tx] = (Real) cols_dev[tx];
 
-	active_sh[threadIdx.x] = cols_dev[threadIdx.x];
+	averageActivityReduction(active_sh);
 
-	averageActivity(active_sh, thread_avg);
-
-	if(threadIdx.x == 0)
-		*avg_dev = thread_avg;	
-
-	__syncthreads();
+	avg_dev[tx] = active_sh[tx];	
 }

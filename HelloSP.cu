@@ -173,7 +173,7 @@ int main(int argc, const char * argv[])
     const Real IN_DENSITY = 0.5; // Density of input connections
     srand(time(NULL));
 
-	size_t sm = BLOCK_SIZE*(sizeof(bool) + sizeof(UInt));
+	size_t sm = BLOCK_SIZE*(sizeof(Real) + sizeof(UInt));
 
     // construct input args
     args ar;
