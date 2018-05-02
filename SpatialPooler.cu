@@ -56,18 +56,24 @@ struct args
 
 // TODO: This could be done via parallel matrix multiplication.
 __device__
-void calculateOverlap(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
+void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
 { 
 	int tx = threadIdx.x;
-   	int inX = blockDim.x*blockIdx.x + tx; // Global index in the SP
+   	int sp_idx = blockDim.x*blockIdx.x + tx; // Global index in the SP
+	int num_assnd = (int)(inBlockSize/blockDim.x);
+	int in_idx = inBlockSize*blockIdx.x + tx*num_assnd; // Beginning of portion of input assigned to this thread
     olaps_sh[tx] = 0;
-	// TODO: This reading from global memory is inefficient.
-    for(int i=0; i < numPot_dev[inX]; i++)
+	// Let each thread load its part of input to shared memory
+	for(int i=0; i < num_assnd; i++)
+		in_sh[tx*num_assnd+i] = in_dev[in_idx+i]; 
+
+	__syncthreads();
+
+    for(int i=0; i < numPot_dev[sp_idx]; i++)
     {
-		UInt in_idx = pot_dev[inX*MAX_CONNECTED+i]; // Index of block-specific input
-		if(input[inBlockSize*blockIdx.x + in_idx])
-				if(per_dev[inX*MAX_CONNECTED+i] >= threshold)
-        			olaps_sh[tx] += boosts_dev[inX+i];
+		UInt bl_idx = pot_dev[sp_idx*MAX_CONNECTED+i]; // Index of block-specific input
+		if(in_sh[bl_idx] && per_dev[sp_idx*MAX_CONNECTED+i] >= threshold)
+        	olaps_sh[tx] += boosts_dev[sp_idx+i];
     }
 }
 
@@ -93,19 +99,19 @@ void inhibitColumns(UInt* olaps_sh, bool* cols_dev, Real* active_sh, bool &activ
 
 // TODO: Can this be implemented via matrix (element-wise) multiplication?
 __device__
-void adaptSynapses(bool* input, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool active, const UInt inBlockSize, const UInt MAX_CONNECTED)
+void adaptSynapses(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool active, const UInt inBlockSize, const UInt MAX_CONNECTED)
 {
     int tx = threadIdx.x;
-   	int inX = blockDim.x*blockIdx.x + tx;
+   	int sp_idx = blockDim.x*blockIdx.x + tx;
 	if(active)
 	{
 		for(int i=0; i < MAX_CONNECTED; i++)
     	{
-			int in_idx = pot_dev[inX*MAX_CONNECTED+i];
-			if(input[inBlockSize*blockIdx.x + in_idx])
-				per_dev[inX*MAX_CONNECTED+i] = min(1.0, per_dev[inX*MAX_CONNECTED+i]+synPermActiveInc, 0.0);
+			int in_idx = pot_dev[sp_idx*MAX_CONNECTED+i];
+			if(in_dev[inBlockSize*blockIdx.x + in_idx])
+				per_dev[sp_idx*MAX_CONNECTED+i] = min(1.0, per_dev[sp_idx*MAX_CONNECTED+i]+synPermActiveInc);
 			else
-				per_dev[inX*MAX_CONNECTED+i] = max(per_dev[inX*MAX_CONNECTED+i]-synPermInactiveDec, 0.0);
+				per_dev[sp_idx*MAX_CONNECTED+i] = max(per_dev[sp_idx*MAX_CONNECTED+i]-synPermInactiveDec, 0.0);
     	}
 	}
 }
@@ -189,18 +195,18 @@ void averageActivityReduction(Real* active_sh)
 __device__
 void updateBoosts(Real* adc_dev, Real* boosts_dev, Real targetDensity, Real boostStrength)
 {
-    int inX = blockIdx.x*blockDim.x+threadIdx.x;
-	boosts_dev[inX] = exp((targetDensity - adc_dev[inX])*boostStrength);
+    int sp_idx = blockIdx.x*blockDim.x+threadIdx.x;
+	boosts_dev[sp_idx] = exp((targetDensity - adc_dev[sp_idx])*boostStrength);
 }
 
 __device__
 void bumpUpColumnsWithWeakOdc(Real* odc_dev, Real* per_dev, UInt* numPot, Real* minOdc_dev, Real synPermBelowStimulusInc, const UInt MAX_CONNECTED)
 {
 	int tx = threadIdx.x;
-    int inX = blockIdx.x*blockDim.x+tx;
+    int sp_idx = blockIdx.x*blockDim.x+tx;
 
-	if(odc_dev[inX] < minOdc_dev[blockIdx.x]) {
-		for(int i=0; i<numPot[inX]; i++)
+	if(odc_dev[sp_idx] < minOdc_dev[blockIdx.x]) {
+		for(int i=0; i<numPot[sp_idx]; i++)
 			per_dev[tx*MAX_CONNECTED+i] += synPermBelowStimulusInc;
 	}
 }
@@ -215,16 +221,15 @@ void updateMinOdc(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real minPctOdc,
 		minOdc_dev[blockIdx.x] = minPctOdc * maxOdc;
 }
 
-// This is close to duplicate code, could be solved by lambda expressions, which are avail.
-// only in > 7.5
+// Lambdas are available in nvcc > 7.5
 __device__
 void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real minPctOdc, const UInt SP_SIZE)
 {
 	int tx = threadIdx.x;
-	int inX = blockDim.x*blockIdx.x + threadIdx.x;
+	int sp_idx = blockDim.x*blockIdx.x + threadIdx.x;
 	UInt BLOCK_SIZE = blockDim.x;
 
-	odc_sh[tx] = odc_dev[inX];
+	odc_sh[tx] = odc_dev[sp_idx];
 	
 	if(BLOCK_SIZE >= 512)
 	{ 
@@ -287,8 +292,9 @@ void compute(args* ar_ptr)
 	UInt* olaps_sh = &shared[0];
 	Real* active_sh = (Real*)&shared[blockDim.x];
 	Real* odc_sh = &active_sh[blockDim.x];
+	bool* in_sh = (bool*) &odc_sh[blockDim.x];
 
-	calculateOverlap(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+	calculateOverlap(ar.in_dev, in_sh, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
 	__syncthreads();
 
@@ -314,12 +320,13 @@ void compute(args* ar_ptr)
 }
 
 __global__
-void calculateOverlap_wrapper(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE)
+void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE)
 {
 	extern __shared__ UInt shared[];
 	UInt* olaps_sh = &shared[0];
+	bool* in_sh = (bool*) &olaps_sh[blockDim.x];
 
-	calculateOverlap(input, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, threshold, inBlockSize, MAX_CONNECTED);
+	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, threshold, inBlockSize, MAX_CONNECTED);
 
 	if(blockDim.x*blockIdx.x+threadIdx.x < SP_SIZE)
 		olaps_dev[blockDim.x*blockIdx.x+threadIdx.x] = olaps_sh[threadIdx.x];
@@ -345,10 +352,10 @@ void inhibitColumns_wrapper(UInt* olaps_dev, bool* cols_dev, Real localAreaDensi
 __global__
 void adaptSynapses_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool* active_arr, const UInt IN_BLOCK_SIZE, const UInt MAX_CONNECTED, const UInt SP_SIZE)
 {
-	int inX = blockIdx.x*blockDim.x + threadIdx.x;
-	if(inX < SP_SIZE)
+	int sp_idx = blockIdx.x*blockDim.x + threadIdx.x;
+	if(sp_idx < SP_SIZE)
 	{
-		bool active = active_arr[inX];
+		bool active = active_arr[sp_idx];
 		adaptSynapses(in_dev, pot_dev, per_dev, synPermActiveInc, synPermInactiveDec, active, IN_BLOCK_SIZE, MAX_CONNECTED);
 	}
 }

@@ -148,7 +148,9 @@ void testCalculateOverlap()
 
 	setup_device1D(ar, in_host, numPot, potential, permanences, boosts, SP_SIZE, IN_SIZE, MAX_CONNECTED);
 
-	calculateOverlap_wrapper<<<NUM_BLOCKS, BLOCK_SIZE, BLOCK_SIZE*sizeof(UInt)>>>(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, threshold, IN_BLOCK_SIZE, MAX_CONNECTED, ar.olaps_dev, SP_SIZE);
+	int sm = BLOCK_SIZE*sizeof(UInt) + IN_BLOCK_SIZE*sizeof(bool);
+
+	calculateOverlap_wrapper<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, threshold, IN_BLOCK_SIZE, MAX_CONNECTED, ar.olaps_dev, SP_SIZE);
 
 	cudaError_t result = cudaMemcpy(olaps, ar.olaps_dev, SP_SIZE*sizeof(UInt), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0);
 
