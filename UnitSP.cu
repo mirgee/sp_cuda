@@ -320,6 +320,11 @@ void testAverageActivity()
 	cudaFree(cols_dev); cudaFree(avg_dev);
 }
 
+void testMinOdcUpdate()
+{
+	// This should test multiple blocks...
+}
+
 int main(int argc, const char * argv[])
 {
 	testCalculateOverlap();

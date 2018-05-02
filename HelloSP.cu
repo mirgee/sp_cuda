@@ -173,7 +173,7 @@ int main(int argc, const char * argv[])
     const Real IN_DENSITY = 0.5; // Density of input connections
     srand(time(NULL));
 
-	size_t sm = BLOCK_SIZE*(sizeof(Real) + sizeof(UInt));
+	size_t sm = BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt));
 
     // construct input args
     args ar;
@@ -191,7 +191,6 @@ int main(int argc, const char * argv[])
 	ar.synPermBelowStimulusInc=ar.synPermConnected / 10.0;
 	ar.dutyCyclePeriod=1000;
 	ar.boostStrength=0.05; // 0 means no boosting
-	ar.minOdc=0; // maxOcd * minPctOdc
 	ar.minPctOdc=0.001;
 	ar.update_period=50;
 	ar.SP_SIZE = SP_SIZE;
@@ -234,6 +233,7 @@ int main(int argc, const char * argv[])
     result = cudaMalloc((void **) &ar.odc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
     result = cudaMalloc((void **) &ar.adc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
     result = cudaMalloc((void **) &ar.boosts_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMalloc((void **) &ar.minOdc_dev, NUM_BLOCKS*sizeof(Real)); if(result) printErrorMessage(result, 0); 
 
 	// Memcpy to device
     result = cudaMemcpy(ar_dev, &ar, sizeof(ar), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
