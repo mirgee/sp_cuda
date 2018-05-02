@@ -54,14 +54,14 @@ struct args
 };
 
 
-// TODO: This could be done via parallel and distributed matrix multiplication.
+// TODO: This could be done via parallel matrix multiplication.
 __device__
 void calculateOverlap(bool* input, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
 { 
 	int tx = threadIdx.x;
    	int inX = blockDim.x*blockIdx.x + tx; // Global index in the SP
     olaps_sh[tx] = 0;
-	// TODO: This reading from global memory is inefficient. Maybe need more efficient data structures to fit into shared memory?
+	// TODO: This reading from global memory is inefficient.
     for(int i=0; i < numPot_dev[inX]; i++)
     {
 		UInt in_idx = pot_dev[inX*MAX_CONNECTED+i]; // Index of block-specific input
@@ -103,9 +103,9 @@ void adaptSynapses(bool* input, UInt* pot_dev, Real* per_dev, Real synPermActive
     	{
 			int in_idx = pot_dev[inX*MAX_CONNECTED+i];
 			if(input[inBlockSize*blockIdx.x + in_idx])
-				per_dev[inX*MAX_CONNECTED+i] = max(min(1.0, per_dev[inX*MAX_CONNECTED+i]+synPermActiveInc), 0.0);
+				per_dev[inX*MAX_CONNECTED+i] = min(1.0, per_dev[inX*MAX_CONNECTED+i]+synPermActiveInc, 0.0);
 			else
-				per_dev[inX*MAX_CONNECTED+i] = max(min(1.0, per_dev[inX*MAX_CONNECTED+i]-synPermInactiveDec), 0.0);
+				per_dev[inX*MAX_CONNECTED+i] = max(per_dev[inX*MAX_CONNECTED+i]-synPermInactiveDec, 0.0);
     	}
 	}
 }
