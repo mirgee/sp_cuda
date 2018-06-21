@@ -290,6 +290,7 @@ void compute(args* ar_ptr)
 
     extern __shared__ UInt shared[];
 	UInt* olaps_sh = &shared[0];
+	// Lepsi jako volatile
 	Real* active_sh = (Real*)&shared[blockDim.x];
 	Real* odc_sh = &active_sh[blockDim.x];
 	bool* in_sh = (bool*) &odc_sh[blockDim.x];
