@@ -147,6 +147,15 @@ void visualize_input(bool* in_host, UInt* potentialPools, Real* permanences, UIn
 	printf("\n");
 }
 
+void visualize_output(bool* cols_host, const UInt SP_SIZE)
+{
+	// The final sparsity will approach target with increasing block size
+	int ones = 0;
+	for(int i=0; i < SP_SIZE; i++)
+		if(cols_host[i] > 0) ones++;
+	printf("Sparsity: %f \n", (Real)ones/SP_SIZE);
+}
+
 void printErrorMessage(cudaError_t error, int memorySize){
     printf("==================================================\n");
     printf("MEMORY ERROR  : %s\n", cudaGetErrorString(error));
@@ -155,21 +164,16 @@ void printErrorMessage(cudaError_t error, int memorySize){
 
 int main(int argc, const char * argv[])
 {
-	const UInt SP_SIZE = 65536;
-	const UInt IN_SIZE = 131072;
+	const UInt SP_SIZE = 524288;
+	const UInt IN_SIZE = 1048576;
 	const UInt BLOCK_SIZE = 64; // Two warps
-	const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE; // 16
-	const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // 128 Size of chunk of input processed by a single cuda block
+	const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
+	const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
 	const UInt MAX_CONNECTED = 16;
     const Real IN_DENSITY = 0.5; // Density of input connections
     srand(time(NULL));
 
-	// Shared mem.: permanences, potential conn., active/overlap duty cycles, active cols - copied from global
-	// 				overlaps, connected counts, boost factors + their mins (using active d.c.) - computed locally
-    // TODO: Compute the mem. requirements, allocate proper amount
-	// input chunk, overlaps, connected, boost factors
-	// size_t sm = (IN_BLOCK_SIZE)*sizeof(bool) + (2*BLOCK_SIZE)*sizeof(UInt) + (BLOCK_SIZE)*sizeof(Real);
-	size_t sm = BLOCK_SIZE*(sizeof(bool) + sizeof(UInt));
+	size_t sm = BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + IN_BLOCK_SIZE*sizeof(bool);
 
     // construct input args
     args ar;
@@ -187,7 +191,6 @@ int main(int argc, const char * argv[])
 	ar.synPermBelowStimulusInc=ar.synPermConnected / 10.0;
 	ar.dutyCyclePeriod=1000;
 	ar.boostStrength=0.05; // 0 means no boosting
-	ar.minOdc=0; // maxOcd * minPctOdc
 	ar.minPctOdc=0.001;
 	ar.update_period=50;
 	ar.SP_SIZE = SP_SIZE;
@@ -213,7 +216,7 @@ int main(int argc, const char * argv[])
 					BLOCK_SIZE, IN_BLOCK_SIZE);
 	generate01(in_host, IN_SIZE, IN_DENSITY);
 
-	visualize_input(in_host, potentialPools, permanences, numPotential, IN_SIZE, SP_SIZE, IN_BLOCK_SIZE, MAX_CONNECTED);
+	// visualize_input(in_host, potentialPools, permanences, numPotential, IN_SIZE, SP_SIZE, IN_BLOCK_SIZE, MAX_CONNECTED);
 
 	// Global memory pointers
 	args* ar_dev;
@@ -230,6 +233,7 @@ int main(int argc, const char * argv[])
     result = cudaMalloc((void **) &ar.odc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
     result = cudaMalloc((void **) &ar.adc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
     result = cudaMalloc((void **) &ar.boosts_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0); 
+    result = cudaMalloc((void **) &ar.minOdc_dev, NUM_BLOCKS*sizeof(Real)); if(result) printErrorMessage(result, 0); 
 
 	// Memcpy to device
     result = cudaMemcpy(ar_dev, &ar, sizeof(ar), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
@@ -245,13 +249,8 @@ int main(int argc, const char * argv[])
     // Memcpy from device
     result = cudaMemcpy(cols_host, ar.cols_dev, SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0); 
 
+	visualize_output(cols_host, SP_SIZE);
 
-	// The final sparsity will approach target with increasing block size
-	int ones = 0;
-	for(int i=0; i < SP_SIZE; i++)
-		if(cols_host[i] > 0) ones++;
-	printf("Sparsity: %f \n", (Real)ones/SP_SIZE);
-    
     cudaFree(ar.in_dev); cudaFree(ar.cols_dev); cudaFree(ar.pot_dev); cudaFree(ar.per_dev); cudaFree(ar.boosts_dev);
 	cudaFree(ar.odc_dev); cudaFree(ar.adc_dev); cudaFree(ar.numPot_dev);
 
