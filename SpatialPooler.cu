@@ -5,6 +5,15 @@ using namespace std;
 typedef unsigned int UInt;
 typedef float Real;
 
+// Define global constants
+const UInt SP_SIZE = 131072;
+const UInt IN_SIZE = 262144;
+const UInt BLOCK_SIZE = 64; // Two warps
+const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
+const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
+const UInt MAX_CONNECTED = 16;
+const Real IN_DENSITY = 0.5; // Density of input connections
+
 struct args
 {
 	// Parameters
@@ -24,18 +33,6 @@ struct args
 	Real minPctOdc;
 	bool learn;
 
-	// Global memory pointers
-	bool* in_dev;
-    bool* cols_dev;
-	UInt* olaps_dev;
-	UInt* pot_dev;
-	Real* per_dev;
-	Real* boosts_dev;
-	Real* odc_dev; // odc serve to maintain same act. freq. for each col. (per block)
-	Real* adc_dev; // adc serve to compute boost factors
-	UInt* numPot_dev;
-	Real* minOdc_dev; // Stores minumum overlap duty cycles per block 
-
 	// Constants
 	UInt SP_SIZE;
 	UInt MAX_CONNECTED;
@@ -52,7 +49,6 @@ struct args
 	UInt iteration_num;
 	UInt update_period;
 };
-
 
 // TODO: This could be done via parallel matrix multiplication.
 __device__
@@ -278,8 +274,21 @@ void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real m
 
 
 __global__
-void compute(args* ar_ptr)
+void compute(args* ar_ptr, void* data)
 {
+	// Global memory pointers
+    bool* cols_dev = (bool*) &data;
+	bool* in_dev = &cols_dev[SP_SIZE];
+	UInt* pot_dev = (UInt*) &in_dev[IN_SIZE];
+	UInt* numPot_dev = &pot_dev[SP_SIZE*MAX_CONNECTED];
+	Real* per_dev = (Real*) &numPot_dev[SP_SIZE];
+	Real* boosts_dev = &per_dev[SP_SIZE*MAX_CONNECTED];
+	UInt* olaps_dev = (UInt*) &boosts_dev[SP_SIZE*MAX_CONNECTED];
+	Real* odc_dev = (Real*) &olaps_dev[SP_SIZE]; // odc serve to maintain same act. freq. for each col. (per block)
+	Real* adc_dev =  &odc_dev[SP_SIZE]; // adc serve to compute boost factors
+	Real* minOdc_dev = &adc_dev[SP_SIZE]; // Stores minumum overlap duty cycles per block 
+
+	
 	if (blockIdx.x == 0 && threadIdx.x == 0) 
 		ar_ptr->iteration_num++;
 	
@@ -295,29 +304,29 @@ void compute(args* ar_ptr)
 	Real* odc_sh = &active_sh[blockDim.x];
 	bool* in_sh = (bool*) &odc_sh[blockDim.x];
 
-	calculateOverlap(ar.in_dev, in_sh, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
 	__syncthreads();
 
-	inhibitColumns(olaps_sh, ar.cols_dev, active_sh, active, ar.localAreaDensity);
+	inhibitColumns(olaps_sh, cols_dev, active_sh, active, ar.localAreaDensity);
 	
 	__syncthreads();
 
-	adaptSynapses(ar.in_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+	adaptSynapses(in_dev, pot_dev, per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
-	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
+	updateDutyCycles(odc_dev, adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
 	// active_sh will hold average activity per block for each column
 	averageActivityReduction(active_sh);
 
 	__syncthreads();
 
-	updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
+	updateBoosts(adc_dev, boosts_dev, avg_act, ar.boostStrength);
 
-	bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
+	bumpUpColumnsWithWeakOdc(odc_dev, per_dev, numPot_dev, minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
 
 	if(ar.iteration_num % ar.update_period == 0)
-		updateMinOdc(ar.odc_dev, odc_sh, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
+		updateMinOdc(odc_dev, odc_sh, minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
 }
 
 __global__
