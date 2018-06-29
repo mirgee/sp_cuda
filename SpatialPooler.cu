@@ -274,10 +274,10 @@ void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real m
 
 
 __global__
-void compute(args* ar_ptr, bool* data)
+void compute(args* ar_ptr, void* data)
 {
 	// Global memory pointers
-    bool* cols_dev = data;
+    bool* cols_dev = (bool*) data;
 	bool* in_dev = &cols_dev[SP_SIZE];
 	UInt* pot_dev = (UInt*) &in_dev[IN_SIZE];
 	UInt* numPot_dev = &pot_dev[SP_SIZE*MAX_CONNECTED];
@@ -285,8 +285,8 @@ void compute(args* ar_ptr, bool* data)
 	Real* boosts_dev = &per_dev[SP_SIZE*MAX_CONNECTED];
 	UInt* olaps_dev = (UInt*) &boosts_dev[SP_SIZE*MAX_CONNECTED];
 	Real* odc_dev = (Real*) &olaps_dev[SP_SIZE]; // odc serve to maintain same act. freq. for each col. (per block)
-	Real* adc_dev =  &odc_dev[SP_SIZE]; // adc serve to compute boost factors
-	Real* minOdc_dev = &adc_dev[SP_SIZE]; // Stores minumum overlap duty cycles per block 
+	Real* adc_dev =  &odc_dev[MAX_CONNECTED*SP_SIZE]; // adc serve to compute boost factors
+	Real* minOdc_dev = &adc_dev[MAX_CONNECTED*SP_SIZE]; // Stores minumum overlap duty cycles per block 
 
 	
 	if (blockIdx.x == 0 && threadIdx.x == 0) 

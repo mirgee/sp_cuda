@@ -25,9 +25,8 @@ using namespace std;
 typedef unsigned int UInt;
 typedef float Real;
 
-UInt* generatePotentialPools(int cols, const UInt IN_BLOCK_SIZE, Real potentialPct, const UInt MAX_CONNECTED, UInt* numPotential)
+UInt* generatePotentialPools(UInt* potentialPools, int cols, const UInt IN_BLOCK_SIZE, Real potentialPct, const UInt MAX_CONNECTED, UInt* numPotential)
 {
-    UInt* potentialPools = new UInt[cols*MAX_CONNECTED];
     int connected = 0;
     for(int i=0; i < cols; i++)
     {
@@ -58,11 +57,10 @@ Real initPermanencesNotConnected(Real synPermConnected_)
 	return p;
 }
 
-Real* generatePermanences(int cols, int inputSize, UInt* potential, Real connectedPct,
+Real* generatePermanences(Real* permanences, int cols, int inputSize, UInt* potential, Real connectedPct,
 		Real synPermConnected_, Real synPermMax_, const UInt MAX_CONNECTED, UInt* numPotential,
 	   	const UInt BLOCK_SIZE, const UInt IN_BLOCK_SIZE)
 {
-    Real* permanences = new Real[cols*MAX_CONNECTED];
 	int connected = 0;
 	int curr_block = 0;
     bool found = false;
@@ -126,12 +124,13 @@ UInt** computeConnected(Real** permanences, UInt** potential, UInt cols, UInt in
 	return connected_arr;
 }
 
-void generate01(bool* ar, size_t size, Real inDensity)
+bool* generate01(bool* ar, size_t size, Real inDensity)
 {
 	for(int i=0; i < size; i++)
 	{
 		ar[i] = (Real)(rand()%100)/100 <= inDensity ? 1 : 0;
 	}
+	return ar;
 }
 
 void visualize_input(bool* in_host, UInt* potentialPools, Real* permanences, UInt* numPotential, const UInt IN_SIZE, const UInt SP_SIZE, const UInt IN_BLOCK_SIZE, const UInt MAX_CONNECTED)
@@ -202,7 +201,7 @@ int main(int argc, const char * argv[])
 
 	// Host memory pointers
     bool* cols_host; 									// = new bool[SP_SIZE];
-	size_t host_alloc_size = IN_SIZE*sizeof(bool) + SP_SIZE*(sizeof(bool) + 2*sizeof(UInt)) + SP_SIZE*MAX_CONNECTED*(sizeof(UInt) + 2*sizeof(Real));
+	size_t host_alloc_size = IN_SIZE*sizeof(bool) + SP_SIZE*(sizeof(bool) + sizeof(UInt)) + SP_SIZE*MAX_CONNECTED*(sizeof(UInt) + 2*sizeof(Real));
 	checkError( cudaHostAlloc((void**) &cols_host, host_alloc_size, cudaHostAllocDefault) );
 	// result = cudaHostAlloc((void**)&in_host, IN_SIZE*sizeof(bool), cudaHostAllocDefault); if(result) printErrorMessage(result, 0);
 	// result = cudaHostAlloc((void**)&boosts, SP_SIZE*MAX_CONNECTED*sizeof(Real), cudaHostAllocDefault); if(result) printErrorMessage(result, 0);
@@ -222,16 +221,16 @@ int main(int argc, const char * argv[])
 	memset(numPotential, 0, SP_SIZE*sizeof(UInt));
 	// memset(numConnected, 0, SP_SIZE);
 
-	potentialPools = generatePotentialPools(SP_SIZE, IN_BLOCK_SIZE, ar.potentialPct, MAX_CONNECTED, numPotential);
-	permanences = generatePermanences(SP_SIZE, IN_SIZE, potentialPools, ar.connectedPct, ar.synPermConnected, ar.synPermMax, MAX_CONNECTED, numPotential,
+	potentialPools = generatePotentialPools(potentialPools, SP_SIZE, IN_BLOCK_SIZE, ar.potentialPct, MAX_CONNECTED, numPotential);
+	permanences = generatePermanences(permanences, SP_SIZE, IN_SIZE, potentialPools, ar.connectedPct, ar.synPermConnected, ar.synPermMax, MAX_CONNECTED, numPotential,
 					BLOCK_SIZE, IN_BLOCK_SIZE);
-	generate01(in_host, IN_SIZE, IN_DENSITY);
+	in_host = generate01(in_host, IN_SIZE, IN_DENSITY);
 
 	// visualize_input(in_host, potentialPools, permanences, numPotential, IN_SIZE, SP_SIZE, IN_BLOCK_SIZE, MAX_CONNECTED);
 
 	// Global memory pointers
 	args* ar_dev;
-	bool* data_dev;
+	void* data_dev;
 
 	// Global memory allocation
 	size_t device_alloc_size = host_alloc_size + SP_SIZE*sizeof(UInt) + 2*MAX_CONNECTED*SP_SIZE*sizeof(Real) + NUM_BLOCKS*sizeof(Real);
