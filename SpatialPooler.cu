@@ -274,10 +274,10 @@ void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real m
 
 
 __global__
-void compute(args* ar_ptr, void* data)
+void compute(args* ar_ptr, bool* data)
 {
 	// Global memory pointers
-    bool* cols_dev = (bool*) &data;
+    bool* cols_dev = data;
 	bool* in_dev = &cols_dev[SP_SIZE];
 	UInt* pot_dev = (UInt*) &in_dev[IN_SIZE];
 	UInt* numPot_dev = &pot_dev[SP_SIZE*MAX_CONNECTED];
