@@ -217,8 +217,8 @@ int main(int argc, const char * argv[])
 	Real* boosts = &permanences[SP_SIZE*MAX_CONNECTED];										// = new Real[SP_SIZE*MAX_CONNECTED];
 
 	// Host memory allocation	
-	memset(boosts, true, SP_SIZE*MAX_CONNECTED*sizeof(bool));
-	memset(numPotential, 0, SP_SIZE*sizeof(UInt));
+	std::fill_n(boosts, SP_SIZE*MAX_CONNECTED, 1.0);
+	std::fill_n(numPotential, SP_SIZE, 0);
 	// memset(numConnected, 0, SP_SIZE);
 
 	potentialPools = generatePotentialPools(potentialPools, SP_SIZE, IN_BLOCK_SIZE, ar.potentialPct, MAX_CONNECTED, numPotential);

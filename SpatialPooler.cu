@@ -304,6 +304,7 @@ void compute(args* ar_ptr, void* data)
 	Real* odc_sh = &active_sh[blockDim.x];
 	bool* in_sh = (bool*) &odc_sh[blockDim.x];
 
+	// TODO: Returns all zero overlaps, yet in_dev values are proper.
 	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
 	__syncthreads();
