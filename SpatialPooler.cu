@@ -50,7 +50,6 @@ struct args
 	UInt update_period;
 };
 
-// TODO: This could be done via parallel matrix multiplication.
 __device__
 void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
 { 
@@ -73,7 +72,6 @@ void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, R
     }
 }
 
-// TODO: This could be done via parallel sorting.
 __device__
 void inhibitColumns(UInt* olaps_sh, bool* cols_dev, Real* active_sh, bool &active, Real sparsity)
 {
@@ -93,7 +91,6 @@ void inhibitColumns(UInt* olaps_sh, bool* cols_dev, Real* active_sh, bool &activ
 	active_sh[tx] = active;
 }
 
-// TODO: Can this be implemented via matrix (element-wise) multiplication?
 __device__
 void adaptSynapses(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool active, const UInt inBlockSize, const UInt MAX_CONNECTED)
 {
@@ -273,6 +270,17 @@ void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real m
 }
 
 
+__device__
+void generatePotentialPools(UInt* pot_dev, UInt* pot_dev_nums, Real potentialPct)
+{
+	
+}
+
+__device__
+void generatePermanences()
+{
+}
+
 __global__
 void compute(args* ar_ptr, void* data)
 {
@@ -304,7 +312,6 @@ void compute(args* ar_ptr, void* data)
 	Real* odc_sh = &active_sh[blockDim.x];
 	bool* in_sh = (bool*) &odc_sh[blockDim.x];
 
-	// TODO: Returns all zero overlaps, yet in_dev values are proper.
 	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
 	__syncthreads();
@@ -317,7 +324,6 @@ void compute(args* ar_ptr, void* data)
 
 	updateDutyCycles(odc_dev, adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
-	// active_sh will hold average activity per block for each column
 	averageActivityReduction(active_sh);
 
 	__syncthreads();

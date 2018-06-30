@@ -200,26 +200,17 @@ int main(int argc, const char * argv[])
 	ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
 
 	// Host memory pointers
-    bool* cols_host; 									// = new bool[SP_SIZE];
+    bool* cols_host;	
 	size_t host_alloc_size = IN_SIZE*sizeof(bool) + SP_SIZE*(sizeof(bool) + sizeof(UInt)) + SP_SIZE*MAX_CONNECTED*(sizeof(UInt) + 2*sizeof(Real));
 	checkError( cudaHostAlloc((void**) &cols_host, host_alloc_size, cudaHostAllocDefault) );
-	// result = cudaHostAlloc((void**)&in_host, IN_SIZE*sizeof(bool), cudaHostAllocDefault); if(result) printErrorMessage(result, 0);
-	// result = cudaHostAlloc((void**)&boosts, SP_SIZE*MAX_CONNECTED*sizeof(Real), cudaHostAllocDefault); if(result) printErrorMessage(result, 0);
-	// result = cudaHostAlloc((void**)&potentialPools, SP_SIZE*MAX_CONNECTED*sizeof(UInt), cudaHostAllocDefault); if(result) printErrorMessage(result, 0);
-	// result = cudaHostAlloc((void**)&permanences, SP_SIZE*MAX_CONNECTED*sizeof(Real), cudaHostAllocDefault); if(result) printErrorMessage(result, 0);
-	// result = cudaHostAlloc((void**)&numPotential, SP_SIZE*sizeof(UInt), cudaHostAllocDefault); if(result) printErrorMessage(result, 0);
-	// result = cudaHostAlloc((void**)&numConnected, SP_SIZE*sizeof(UInt), cudaHostAllocDefault); if(result) printErrorMessage(result, 0);
-	bool* in_host = (bool*) &cols_host[SP_SIZE]; 										// = new bool[IN_SIZE];
+	bool* in_host = (bool*) &cols_host[SP_SIZE]; 
     UInt* potentialPools = (UInt*) &in_host[IN_SIZE];
-	UInt* numPotential = &potentialPools[SP_SIZE*MAX_CONNECTED];									// = new UInt[SP_SIZE];
-	// UInt* numConnected = &numPotential[SP_SIZE];									// = new UInt[SP_SIZE];
+	UInt* numPotential = &potentialPools[SP_SIZE*MAX_CONNECTED];
 	Real* permanences = (Real*) &numPotential[SP_SIZE];
-	Real* boosts = &permanences[SP_SIZE*MAX_CONNECTED];										// = new Real[SP_SIZE*MAX_CONNECTED];
+	Real* boosts = &permanences[SP_SIZE*MAX_CONNECTED];
 
 	// Host memory allocation	
 	std::fill_n(boosts, SP_SIZE*MAX_CONNECTED, 1.0);
-	std::fill_n(numPotential, SP_SIZE, 0);
-	// memset(numConnected, 0, SP_SIZE);
 
 	potentialPools = generatePotentialPools(potentialPools, SP_SIZE, IN_BLOCK_SIZE, ar.potentialPct, MAX_CONNECTED, numPotential);
 	permanences = generatePermanences(permanences, SP_SIZE, IN_SIZE, potentialPools, ar.connectedPct, ar.synPermConnected, ar.synPermMax, MAX_CONNECTED, numPotential,
@@ -236,28 +227,12 @@ int main(int argc, const char * argv[])
 	size_t device_alloc_size = host_alloc_size + SP_SIZE*sizeof(UInt) + 2*MAX_CONNECTED*SP_SIZE*sizeof(Real) + NUM_BLOCKS*sizeof(Real);
     checkError( cudaMalloc((void **) &ar_dev, sizeof(ar)) );
 	checkError( cudaMalloc((void **) &data_dev, device_alloc_size) );
-    // checkError( cudaMalloc((void **) &ar.cols_dev, SP_SIZE*sizeof(bool)) );
-    // checkError( cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)) ); 
-    // checkError( cudaMalloc((void **) &ar.boosts_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)) );
-    // checkError( cudaMalloc((void **) &ar.pot_dev, MAX_CONNECTED*SP_SIZE*sizeof(UInt)) );
-    // checkError( cudaMalloc((void **) &ar.per_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)) );
-	// checkError( cudaMalloc((void **) &ar.numPot_dev, SP_SIZE*sizeof(UInt)) );
-
-    // checkError( cudaMalloc((void **) &ar.olaps_dev, SP_SIZE*sizeof(UInt)) );
-    // checkError( cudaMalloc((void **) &ar.odc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)) );
-    // checkError( cudaMalloc((void **) &ar.adc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)) );
-    // checkError( cudaMalloc((void **) &ar.minOdc_dev, NUM_BLOCKS*sizeof(Real)) );
 
 	checkError( cudaMemset(data_dev, 0, device_alloc_size) );
 
 	// Memcpy to device
     checkError( cudaMemcpy(ar_dev, (void**) &ar, sizeof(ar), cudaMemcpyHostToDevice) );
     checkError( cudaMemcpy(data_dev, cols_host, host_alloc_size, cudaMemcpyHostToDevice) );
-    // result = cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    // result = cudaMemcpy(ar.boosts_dev, boosts, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    // result = cudaMemcpy(ar.pot_dev, potentialPools, MAX_CONNECTED*SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    // result = cudaMemcpy(ar.per_dev, permanences, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    // result = cudaMemcpy(ar.numPot_dev, numPotential, SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 
 	// Kernel call
     compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev, data_dev);
