@@ -8,10 +8,10 @@ typedef float Real;
 // Define global constants
 const UInt SP_SIZE = 131072;
 const UInt IN_SIZE = 262144;
-const UInt BLOCK_SIZE = 64; // Two warps
+const UInt BLOCK_SIZE = 1024;
 const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
 const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
-const UInt MAX_CONNECTED = 16;
+const UInt MAX_CONNECTED = 1024;
 const Real IN_DENSITY = 0.5; // Density of input connections
 
 struct args
@@ -271,9 +271,91 @@ void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real m
 
 
 __device__
-void generatePotentialPools(UInt* pot_dev, UInt* pot_dev_nums, Real potentialPct)
+inline void random_swap(UInt& a, UInt& b, curandState* state)
 {
+	UInt temp;
+	temp = a;
+	a = b;
+	b = temp;
+}
+
+__device__
+void generatePotentialPools(UInt* pot_dev, UInt* pot_dev_pitch, UInt num_connected, thrust::device_vector<UInt>* input_indeces, curandState* states)
+{
+	UInt tx = threadIdx.x;
+	UInt id = threadIdx.x + blockIdx.x*blockDim.x;
+	UInt BLOCK_SIZE = blockDim.x;
+	// No, start with 1 elem per thread
+	// UInt elems_per_thread = __ceil((float)IN_BLOCK_SIZE / BLOCK_SIZE);
+	curandState localState = states[id];
+	__shared__ UInt shared[BLOCK_SIZE];
+
+	// int i, j;
+	// for(i = 0; i < SHARED_SIZE / BLOCK_SIZE; i++)
+	// 	j = i*SHARED_SIZE + tx;
+	// 	shared[j] = j < IN_BLOCK_SIZE ? input_indeces[j] : shared[j];
+
+	while(id < IN_BLOCK_SIZE)
+	{
+		if(curand(&localState) & 1)
+		{
+			// No switch, only read
+			shared[tx] = input_indeces[id+BLOCK_SIZE];
+			id += BLOCK_SIZE;
+		}
+	}
+
+	__syncthreads();
+
+	// Do reduction on shared
+
+	if(BLOCK_SIZE >= 512)
+	{ 
+		if(tx < 256) 
+		{ 
+			random_swap(shared[tx], shared[tx+256], &localState); 
+		} 
+		__syncthreads(); 
+	}
+    if(BLOCK_SIZE >= 256)
+   	{ 
+		if(tx < 128) 
+		{ 
+			random_swap(shared[tx], shared[tx+128], &localState); 
+		} 
+		__syncthreads(); 
+	}
+    if(BLOCK_SIZE >= 128)
+   	{ 
+		if(tx < 64) 
+		{ 
+			random_swap(shared[tx], shared[tx+64], &localState); 
+		} 
+		__syncthreads(); 
+	}
+
+	if(tx < 32) 
+    {
+        if(BLOCK_SIZE >= 64) 
+			random_swap(shared[tx], shared[tx+32], &localState);
+        if(BLOCK_SIZE >= 32) 
+			random_swap(shared[tx], shared[tx+16], &localState);
+        if(BLOCK_SIZE >= 16) 
+			random_swap(shared[tx], shared[tx+8], &localState);
+        if(BLOCK_SIZE >= 8) 
+			random_swap(shared[tx], shared[tx+4], &localState);
+        if(BLOCK_SIZE >= 4)
+			random_swap(shared[tx], shared[tx+2], &localState);
+        if(BLOCK_SIZE >= 2) 
+			random_swap(shared[tx], shared[tx+1], &localState);
+    }
+
+	__syncthreads();
+
+	// Write to global memory
 	
+	if(tx < num_connected)
+		pot_dev[blockIdx.x*pot_dev_pitch + tx] = shared[tx];
 }
 
 __device__
