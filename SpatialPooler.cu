@@ -32,6 +32,19 @@ struct args
 	Real boostStrength;
 	Real minPctOdc;
 	bool learn;
+	UInt num_connected;
+
+	// Data
+	bool* in_dev;
+    bool* cols_dev;
+	UInt* olaps_dev;
+	UInt* pot_dev;
+	Real* per_dev;
+	Real* boosts_dev;
+	Real* odc_dev; // odc serve to maintain same act. freq. for each col. (per block)
+	Real* adc_dev; // adc serve to compute boost factors
+	UInt* numPot_dev;
+	Real* minOdc_dev;
 
 	// Constants
 	UInt SP_SIZE;
@@ -39,11 +52,8 @@ struct args
 	UInt IN_BLOCK_SIZE; // Dims of input chunk for each cuda block
 
 	// Array pitches
-	size_t pot_pitch_in_bytes;
-	size_t per_pitch_in_bytes;
-	size_t odc_pitch_in_bytes;
-	size_t adc_pitch_in_bytes;
-	size_t bst_pitch_in_bytes;
+	size_t pot_dev_pitch;
+	size_t per_dev_pitch;
 
 	// Bookkeeping vars
 	UInt iteration_num;
@@ -273,14 +283,17 @@ void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real m
 __device__
 inline void random_swap(UInt& a, UInt& b, curandState* state)
 {
-	UInt temp;
-	temp = a;
-	a = b;
-	b = temp;
+	if(curand(state) & 1)
+	{
+		UInt temp;
+		temp = a;
+		a = b;
+		b = temp;
+	}
 }
 
-__device__
-void generatePotentialPools(UInt* pot_dev, UInt* pot_dev_pitch, UInt num_connected, thrust::device_vector<UInt>* input_indeces, curandState* states)
+__global__
+void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connected, UInt* input_indeces, curandState* states)
 {
 	UInt tx = threadIdx.x;
 	UInt id = threadIdx.x + blockIdx.x*blockDim.x;
@@ -288,7 +301,7 @@ void generatePotentialPools(UInt* pot_dev, UInt* pot_dev_pitch, UInt num_connect
 	// No, start with 1 elem per thread
 	// UInt elems_per_thread = __ceil((float)IN_BLOCK_SIZE / BLOCK_SIZE);
 	curandState localState = states[id];
-	__shared__ UInt shared[BLOCK_SIZE];
+	extern __shared__ UInt shared[];
 
 	// int i, j;
 	// for(i = 0; i < SHARED_SIZE / BLOCK_SIZE; i++)
@@ -358,9 +371,15 @@ void generatePotentialPools(UInt* pot_dev, UInt* pot_dev_pitch, UInt num_connect
 		pot_dev[blockIdx.x*pot_dev_pitch + tx] = shared[tx];
 }
 
-__device__
-void generatePermanences()
+__global__
+void generatePermanences(Real* per_dev, size_t per_dev_pitch, Real connectedPct, Real synPermConnected, Real synPermMax, curandState* states)
 {
+	UInt col = blockIdx.x;
+	UInt tx = threadIdx.x;
+	curandState localState = states[col*blockDim.x + tx];
+	bool connected = (Real) curand_uniform(&localState) <= connectedPct;
+	per_dev[col*per_dev_pitch + tx] = connected ? synPermConnected + (synPermMax - synPermConnected)*((Real) curand_uniform(&localState)) :
+													synPermConnected * (Real)curand_uniform(&localState);
 }
 
 __global__
