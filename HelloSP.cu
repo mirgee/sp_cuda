@@ -256,6 +256,10 @@ int main(int argc, const char * argv[])
     checkError( cudaMemcpy(ar_dev, (void**) &ar, sizeof(ar), cudaMemcpyHostToDevice) );
     checkError( cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice) );
 
+	// Compute permanences
+	sm = IN_BLOCK_SIZE*sizeof(UInt);
+	calculateOverlap<<<SP_SIZE, BLOCK_SIZE, sm>>>(ar.in_dev, ar.pot_dev, ar.pot_dev_pitch, ar.per_dev, ar.per_dev_pitch, ar.boosts_dev, ar.synPermConnected, ar.num_connected)
+	
 	// Kernel call
 	// sm = BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + IN_BLOCK_SIZE*sizeof(bool);
     // compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev, data_dev);

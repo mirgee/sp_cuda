@@ -1,2 +1,3 @@
-# htm.cuda
-GPU version of HTM (SP first, optionally TM)
+# Implementation of HTM Spatial Pooler algorithm in CUDA
+
+I will publish detailed readme soon

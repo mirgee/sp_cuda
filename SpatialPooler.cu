@@ -83,6 +83,33 @@ void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, R
 }
 
 __device__
+void calculateOverlap(bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* per_dev, UInt* per_dev_pitch, Real* boosts_dev, Real threshold, UInt numConnected)
+{
+	// TODO: block sizes should be restricted such that shared memory is never exceeded
+	extern __shared__ UInt in_sh[IN_BLOCK_SIZE];
+
+	// thread per column, each loads index, then permanence, one after another -> accesses are coalesced
+	// accesses to shared memory are not coalesced
+
+	UInt tx = threadIdx.x;
+   	UInt sp_idx = blockDim.x*blockIdx.x + tx; // Global index in the SP
+	UInt in_block_start = IN_BLOCK_SIZE*blockIdx.x;
+	UInt olaps = 0;
+
+	for(int i = 0; i < IN_BLOCK_SIZE - tx; i += blockDim.x)
+		in_sh[tx + i] = in_dev[in_block_start + tx + i]; 
+
+	__syncthreads();
+
+    for(int i=0; i < numConnected; i++)
+    {
+		UInt bl_idx = pot_dev[sp_idx*pot_dev_pitch+i]; // Index of block-specific input
+		if(in_sh[bl_idx] && per_dev[sp_idx*per_dev_pitch+i] >= threshold)
+        	olaps += boosts_dev[sp_idx+i];
+    }
+}
+
+__device__
 void inhibitColumns(UInt* olaps_sh, bool* cols_dev, Real* active_sh, bool &active, Real sparsity)
 {
     int tx = threadIdx.x;
