@@ -6,8 +6,8 @@ typedef unsigned int UInt;
 typedef float Real;
 
 // Define global constants
-const UInt SP_SIZE = 131072;
-const UInt IN_SIZE = 262144;
+const UInt SP_SIZE = 65535;
+const UInt IN_SIZE = 131072;
 const UInt BLOCK_SIZE = 1024;
 const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
 const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
@@ -58,7 +58,125 @@ struct args
 	// Bookkeeping vars
 	UInt iteration_num;
 	UInt update_period;
+
+	curandState* dev_states;
 };
+
+__global__ void setup_kernel(curandState *state)
+{
+    int id = threadIdx.x + blockIdx.x*blockDim.x;
+    curand_init(727612, id, 0, &state[id]);
+}
+
+__device__
+inline void random_swap(UInt& a, UInt& b, curandState* state)
+{
+	// if(curand(state) & 1)
+	if(curand_uniform(state) < 0.2)
+	{
+		UInt temp;
+		temp = a;
+		a = b;
+		b = temp;
+	}
+}
+
+__global__
+void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connected, UInt* input_indeces, curandState* states)
+{
+	UInt tx = threadIdx.x;
+	// UInt BLOCK_SIZE = blockDim.x;
+	// No, start with 1 elem per thread
+	// UInt elems_per_thread = __ceil((float)IN_BLOCK_SIZE / BLOCK_SIZE);
+	curandState localState = states[threadIdx.x + blockIdx.x*blockDim.x];
+	extern __shared__ UInt shared[];
+
+	// int i, j;
+	// for(i = 0; i < SHARED_SIZE / BLOCK_SIZE; i++)
+	// 	j = i*SHARED_SIZE + tx;
+	// 	shared[j] = j < IN_BLOCK_SIZE ? input_indeces[j] : shared[j];
+
+	shared[tx] = input_indeces[tx];
+
+    int id = BLOCK_SIZE;	
+	float x = 0;
+	while(id < IN_BLOCK_SIZE - tx)
+	{
+		// x = (float) (curand(&localState) % 100) / 100;
+		x = curand_uniform(&localState);
+		if(x > (float) BLOCK_SIZE / IN_BLOCK_SIZE)
+		// if(x < 0.01)
+		{
+			// No switch, only read
+			shared[tx] = input_indeces[tx+id];
+		}
+		id += BLOCK_SIZE;
+	}
+
+	__syncthreads();
+
+	// Do reduction on shared
+
+	if(BLOCK_SIZE >= 512)
+	{ 
+		if(tx < 256) 
+		{ 
+			random_swap(shared[tx], shared[tx+256], &localState); 
+		} 
+		__syncthreads(); 
+	}
+    if(BLOCK_SIZE >= 256)
+   	{ 
+		if(tx < 128) 
+		{ 
+			random_swap(shared[tx], shared[tx+128], &localState); 
+		} 
+		__syncthreads(); 
+	}
+    if(BLOCK_SIZE >= 128)
+   	{ 
+		if(tx < 64) 
+		{ 
+			random_swap(shared[tx], shared[tx+64], &localState); 
+		} 
+		__syncthreads(); 
+	}
+
+	if(tx < 32) 
+    {
+        if(BLOCK_SIZE >= 64) 
+			random_swap(shared[tx], shared[tx+32], &localState);
+        if(BLOCK_SIZE >= 32) 
+			random_swap(shared[tx], shared[tx+16], &localState);
+        if(BLOCK_SIZE >= 16) 
+			random_swap(shared[tx], shared[tx+8], &localState);
+        if(BLOCK_SIZE >= 8) 
+			random_swap(shared[tx], shared[tx+4], &localState);
+        if(BLOCK_SIZE >= 4)
+			random_swap(shared[tx], shared[tx+2], &localState);
+        if(BLOCK_SIZE >= 2) 
+			random_swap(shared[tx], shared[tx+1], &localState);
+    }
+
+	__syncthreads();
+
+	// Write to global memory
+	
+	if(tx < num_connected)
+		pot_dev[blockIdx.x*pot_dev_pitch + tx] = shared[tx];
+}
+
+__global__
+void generatePermanences(Real* per_dev, size_t per_dev_pitch, Real connectedPct, Real synPermConnected, Real synPermMax, curandState* states)
+{
+	UInt col = blockIdx.x;
+	UInt tx = threadIdx.x;
+	curandState localState = states[col*blockDim.x + tx];
+	// curandState localState = *states;
+	bool connected = (Real) curand_uniform(&localState) <= connectedPct;
+	per_dev[col*per_dev_pitch + tx] = connected ? synPermConnected + (synPermMax - synPermConnected)*((Real) curand_uniform(&localState)) :
+													synPermConnected * (Real)curand_uniform(&localState);
+}
 
 __device__
 void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
@@ -83,10 +201,10 @@ void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, R
 }
 
 __device__
-void calculateOverlap(bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* per_dev, UInt* per_dev_pitch, Real* boosts_dev, Real threshold, UInt numConnected)
+void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* per_dev, size_t per_dev_pitch, Real* boosts_dev, Real threshold, UInt numConnected)
 {
 	// TODO: block sizes should be restricted such that shared memory is never exceeded
-	extern __shared__ UInt in_sh[IN_BLOCK_SIZE];
+	// __shared__ UInt in_sh[IN_BLOCK_SIZE];
 
 	// thread per column, each loads index, then permanence, one after another -> accesses are coalesced
 	// accesses to shared memory are not coalesced
@@ -104,9 +222,13 @@ void calculateOverlap(bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* p
     for(int i=0; i < numConnected; i++)
     {
 		UInt bl_idx = pot_dev[sp_idx*pot_dev_pitch+i]; // Index of block-specific input
-		if(in_sh[bl_idx] && per_dev[sp_idx*per_dev_pitch+i] >= threshold)
+		if(in_sh[bl_idx] && (per_dev[sp_idx*per_dev_pitch+i] >= threshold))
         	olaps += boosts_dev[sp_idx+i];
     }
+
+	__syncthreads();
+
+	olaps_sh[tx] = olaps;
 }
 
 __device__
@@ -307,122 +429,23 @@ void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real m
 }
 
 
-__device__
-inline void random_swap(UInt& a, UInt& b, curandState* state)
-{
-	if(curand(state) & 1)
-	{
-		UInt temp;
-		temp = a;
-		a = b;
-		b = temp;
-	}
-}
+
+
 
 __global__
-void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connected, UInt* input_indeces, curandState* states)
-{
-	UInt tx = threadIdx.x;
-	UInt id = threadIdx.x + blockIdx.x*blockDim.x;
-	UInt BLOCK_SIZE = blockDim.x;
-	// No, start with 1 elem per thread
-	// UInt elems_per_thread = __ceil((float)IN_BLOCK_SIZE / BLOCK_SIZE);
-	curandState localState = states[id];
-	extern __shared__ UInt shared[];
-
-	// int i, j;
-	// for(i = 0; i < SHARED_SIZE / BLOCK_SIZE; i++)
-	// 	j = i*SHARED_SIZE + tx;
-	// 	shared[j] = j < IN_BLOCK_SIZE ? input_indeces[j] : shared[j];
-
-	while(id < IN_BLOCK_SIZE)
-	{
-		if(curand(&localState) & 1)
-		{
-			// No switch, only read
-			shared[tx] = input_indeces[id+BLOCK_SIZE];
-			id += BLOCK_SIZE;
-		}
-	}
-
-	__syncthreads();
-
-	// Do reduction on shared
-
-	if(BLOCK_SIZE >= 512)
-	{ 
-		if(tx < 256) 
-		{ 
-			random_swap(shared[tx], shared[tx+256], &localState); 
-		} 
-		__syncthreads(); 
-	}
-    if(BLOCK_SIZE >= 256)
-   	{ 
-		if(tx < 128) 
-		{ 
-			random_swap(shared[tx], shared[tx+128], &localState); 
-		} 
-		__syncthreads(); 
-	}
-    if(BLOCK_SIZE >= 128)
-   	{ 
-		if(tx < 64) 
-		{ 
-			random_swap(shared[tx], shared[tx+64], &localState); 
-		} 
-		__syncthreads(); 
-	}
-
-	if(tx < 32) 
-    {
-        if(BLOCK_SIZE >= 64) 
-			random_swap(shared[tx], shared[tx+32], &localState);
-        if(BLOCK_SIZE >= 32) 
-			random_swap(shared[tx], shared[tx+16], &localState);
-        if(BLOCK_SIZE >= 16) 
-			random_swap(shared[tx], shared[tx+8], &localState);
-        if(BLOCK_SIZE >= 8) 
-			random_swap(shared[tx], shared[tx+4], &localState);
-        if(BLOCK_SIZE >= 4)
-			random_swap(shared[tx], shared[tx+2], &localState);
-        if(BLOCK_SIZE >= 2) 
-			random_swap(shared[tx], shared[tx+1], &localState);
-    }
-
-	__syncthreads();
-
-	// Write to global memory
-	
-	if(tx < num_connected)
-		pot_dev[blockIdx.x*pot_dev_pitch + tx] = shared[tx];
-}
-
-__global__
-void generatePermanences(Real* per_dev, size_t per_dev_pitch, Real connectedPct, Real synPermConnected, Real synPermMax, curandState* states)
-{
-	UInt col = blockIdx.x;
-	UInt tx = threadIdx.x;
-	curandState localState = states[col*blockDim.x + tx];
-	bool connected = (Real) curand_uniform(&localState) <= connectedPct;
-	per_dev[col*per_dev_pitch + tx] = connected ? synPermConnected + (synPermMax - synPermConnected)*((Real) curand_uniform(&localState)) :
-													synPermConnected * (Real)curand_uniform(&localState);
-}
-
-__global__
-void compute(args* ar_ptr, void* data)
+void compute(args* ar_ptr)
 {
 	// Global memory pointers
-    bool* cols_dev = (bool*) data;
-	bool* in_dev = &cols_dev[SP_SIZE];
-	UInt* pot_dev = (UInt*) &in_dev[IN_SIZE];
-	UInt* numPot_dev = &pot_dev[SP_SIZE*MAX_CONNECTED];
-	Real* per_dev = (Real*) &numPot_dev[SP_SIZE];
-	Real* boosts_dev = &per_dev[SP_SIZE*MAX_CONNECTED];
-	UInt* olaps_dev = (UInt*) &boosts_dev[SP_SIZE*MAX_CONNECTED];
-	Real* odc_dev = (Real*) &olaps_dev[SP_SIZE]; // odc serve to maintain same act. freq. for each col. (per block)
-	Real* adc_dev =  &odc_dev[MAX_CONNECTED*SP_SIZE]; // adc serve to compute boost factors
-	Real* minOdc_dev = &adc_dev[MAX_CONNECTED*SP_SIZE]; // Stores minumum overlap duty cycles per block 
+    // bool* cols_dev = (bool*) data;
+	// bool* in_dev = &cols_dev[SP_SIZE];
+	// UInt* pot_dev = (UInt*) &in_dev[IN_SIZE];
+	// UInt* numPot_dev = &pot_dev[SP_SIZE*MAX_CONNECTED];
+	// Real* per_dev = (Real*) &numPot_dev[SP_SIZE];
+	// Real* boosts_dev = &per_dev[SP_SIZE*MAX_CONNECTED];
+	// UInt* olaps_dev = (UInt*) &boosts_dev[SP_SIZE*MAX_CONNECTED];
+	// Real* odc_dev = (Real*) &olaps_dev[SP_SIZE]; // odc serve to maintain same act. freq. for each col. (per block)
+	// Real* adc_dev =  &odc_dev[MAX_CONNECTED*SP_SIZE]; // adc serve to compute boost factors
+	// Real* minOdc_dev = &adc_dev[MAX_CONNECTED*SP_SIZE]; // Stores minumum overlap duty cycles per block 
 
 	
 	if (blockIdx.x == 0 && threadIdx.x == 0) 
@@ -440,28 +463,30 @@ void compute(args* ar_ptr, void* data)
 	Real* odc_sh = &active_sh[blockDim.x];
 	bool* in_sh = (bool*) &odc_sh[blockDim.x];
 
-	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+	// calculateOverlap(ar.in_dev, in_sh, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
-	__syncthreads();
-
-	inhibitColumns(olaps_sh, cols_dev, active_sh, active, ar.localAreaDensity);
+    calculateOverlap(olaps_sh, in_sh, ar.cols_dev, ar.pot_dev, ar.pot_dev_pitch, ar.per_dev, ar.per_dev_pitch, ar.boosts_dev, ar.synPermConnected, ar.num_connected);
 	
 	__syncthreads();
 
-	adaptSynapses(in_dev, pot_dev, per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+	inhibitColumns(olaps_sh, ar.cols_dev, active_sh, active, ar.localAreaDensity);
+	
+	__syncthreads();
 
-	updateDutyCycles(odc_dev, adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
+	adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+
+	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
 	averageActivityReduction(active_sh);
 
 	__syncthreads();
 
-	updateBoosts(adc_dev, boosts_dev, avg_act, ar.boostStrength);
+	updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
 
-	bumpUpColumnsWithWeakOdc(odc_dev, per_dev, numPot_dev, minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
+	bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
 
 	if(ar.iteration_num % ar.update_period == 0)
-		updateMinOdc(odc_dev, odc_sh, minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
+		updateMinOdc(ar.odc_dev, ar.odc_dev, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
 }
 
 __global__
