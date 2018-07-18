@@ -18,6 +18,11 @@
 #include <thrust/device_free.h>
 #include <thrust/device_vector.h>
 
+#include <thrust/random.h>
+#include <thrust/transform.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/generate.h>
+
 #include "SpatialPooler.cu"
 
 #define checkError(ans) { gpuAssert((ans), __FILE__, __LINE__); }
@@ -144,6 +149,36 @@ bool* generate01(bool* ar, size_t size, Real inDensity)
 	return ar;
 }
 
+__host__ __device__ __inline__ bool rand01() {
+	thrust::default_random_engine rng;
+	thrust::uniform_int_distribution<int> dist(0, 1);
+	rng.discard(IN_SIZE);
+
+	return (bool) dist(rng);
+
+	// thrust::default_random_engine rng;
+	// thrust::uniform_real_distribution<float> dist(0, 1);
+	// rng.discard(n);
+
+	// return dist(rng) <= IN_DENSITY ? 1 : 0;
+
+}
+
+
+struct prg : public thrust::unary_function<unsigned int,bool>
+{
+    __host__ __device__
+        bool operator()(const unsigned int thread_id) const
+        {
+            thrust::default_random_engine rng;
+            thrust::uniform_real_distribution<float> dist(0, 1);
+            rng.discard(thread_id);
+
+            return dist(rng) <= IN_DENSITY ? true : false;
+        }
+};
+
+
 void visualize_input(bool* in_host, UInt* potentialPools, Real* permanences, UInt* numPotential, const UInt IN_SIZE, const UInt SP_SIZE, const UInt IN_BLOCK_SIZE, const UInt MAX_CONNECTED)
 {
 	printf("POTENTIAL CONNECTIONS WITH PERMANENCES\n");
@@ -216,10 +251,10 @@ int main(int argc, const char * argv[])
 	// Host memory allocation
 	size_t host_alloc_size = (IN_SIZE+SP_SIZE)*sizeof(bool);
     bool* cols_host = (bool*) malloc(host_alloc_size);
-	bool* in_host = (bool*) &cols_host[SP_SIZE]; 
+	// bool* in_host = (bool*) &cols_host[SP_SIZE]; 
 
 	// Host memory init	
-	in_host = generate01(in_host, IN_SIZE, IN_DENSITY);
+	// in_host = generate01(in_host, IN_SIZE, IN_DENSITY);
 
 	// visualize_input(in_host, potentialPools, permanences, numPotential, IN_SIZE, SP_SIZE, IN_BLOCK_SIZE, MAX_CONNECTED);
 
@@ -241,7 +276,7 @@ int main(int argc, const char * argv[])
 	checkError( cudaMalloc((void **) &ar.minOdc_dev, NUM_BLOCKS*sizeof(Real)) );
 	checkError( cudaMalloc((void **) &ar.dev_states, SP_SIZE*BLOCK_SIZE*sizeof(curandState)) );
 
-	// Global memory initialization
+	// Gloal memory initialization
 	// Potential pools
 	thrust::device_vector<UInt> input_indeces(IN_BLOCK_SIZE);
 	// UInt* indeces_ptr = thrust::raw_pointer_cast(input_indeces.data());
@@ -252,6 +287,7 @@ int main(int argc, const char * argv[])
 	setup_kernel<<<NUM_BLOCKS, BLOCK_SIZE>>>(ar.dev_states);
 
 	size_t sm = BLOCK_SIZE*sizeof(UInt);
+	cudaThreadSynchronize();
 	generatePotentialPools<<<SP_SIZE, BLOCK_SIZE, sm>>>(ar.pot_dev, ar.pot_dev_pitch, ar.num_connected, indeces_ptr, ar.dev_states);
 
 	// Permanences
@@ -260,13 +296,27 @@ int main(int argc, const char * argv[])
 	// Boosts
 	thrust::device_ptr<float> dev_ptr(ar.boosts_dev);
 	thrust::fill(dev_ptr, dev_ptr+SP_SIZE*ar.num_connected*sizeof(Real), 1.0);
+	
+	// Input
+	thrust::device_vector<bool> in_vector(IN_SIZE);
+	// thrust::generate(in_vector.begin(), in_vector.end(), rand01);
+
+	thrust::counting_iterator<unsigned int> index_sequence_begin(0);
+
+    thrust::transform(index_sequence_begin,
+            index_sequence_begin + IN_SIZE,
+            in_vector.begin(),
+            prg());
+
+	ar.cols_dev = thrust::raw_pointer_cast(&in_vector[0]);
 
 	// Memcpy to device
     checkError( cudaMemcpy(ar_dev, (void**) &ar, sizeof(ar), cudaMemcpyHostToDevice) );
-    checkError( cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice) );
+    // checkError( cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice) );
 
 	// Kernel call
 	sm = BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + IN_BLOCK_SIZE*sizeof(bool);
+	cudaThreadSynchronize();
     compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev);
 
     // // Memcpy from device
