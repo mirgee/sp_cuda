@@ -8,13 +8,13 @@ typedef unsigned int UInt;
 typedef float Real;
 
 // Define global constants
-const UInt SP_SIZE = 65536;
-const UInt IN_SIZE = 131072;
-const UInt BLOCK_SIZE = 1024;
-const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
-const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
-const UInt MAX_CONNECTED = 1024;
-const Real IN_DENSITY = 0.5; // Density of input connections
+// const UInt SP_SIZE = 65536;
+// const UInt IN_SIZE = 131072;
+// const UInt BLOCK_SIZE = 1024;
+// const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
+// const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
+// const UInt MAX_CONNECTED = 1024;
+// const Real IN_DENSITY = 0.5; // Density of input connections
 
 struct args
 {
@@ -34,7 +34,7 @@ struct args
 	Real boostStrength;
 	Real minPctOdc;
 	bool learn;
-	UInt num_connected;
+	UInt num_connected = IN_BLOCK_SIZE * potentialPct;
 
 	// Data
 	bool* in_dev;
@@ -49,9 +49,13 @@ struct args
 	Real* minOdc_dev;
 
 	// Constants
-	UInt SP_SIZE;
-	UInt MAX_CONNECTED;
-	UInt IN_BLOCK_SIZE; // Dims of input chunk for each cuda block
+	UInt SP_SIZE = 65536;
+	UInt IN_SIZE = 131072;
+	UInt BLOCK_SIZE = 1024;
+	UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
+	UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
+	UInt MAX_CONNECTED = 1024;
+	Real IN_DENSITY = 0.5; // Density of input connections
 
 	// Array pitches
 	size_t pot_dev_pitch;
@@ -84,7 +88,7 @@ inline void random_swap(UInt& a, UInt& b, curandState* state)
 }
 
 __global__
-void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connected, UInt* input_indeces, curandState* states)
+void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connected, UInt* input_indeces, curandState* states, UInt IN_BLOCK_SIZE)
 {
 	UInt tx = threadIdx.x;
 	// UInt BLOCK_SIZE = blockDim.x;
@@ -92,6 +96,8 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
 	// UInt elems_per_thread = __ceil((float)IN_BLOCK_SIZE / BLOCK_SIZE);
 	curandState localState = states[threadIdx.x + blockIdx.x*blockDim.x];
 	extern __shared__ UInt shared[];
+
+	UInt BLOCK_SIZE = blockDim.x;
 
 	// int i, j;
 	// for(i = 0; i < SHARED_SIZE / BLOCK_SIZE; i++)
@@ -205,7 +211,7 @@ void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, R
 }
 
 __device__
-void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* per_dev, size_t per_dev_pitch, Real* boosts_dev, Real threshold, UInt numConnected)
+void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* per_dev, size_t per_dev_pitch, Real* boosts_dev, Real threshold, UInt numConnected, const UInt IN_BLOCK_SIZE)
 {
 	// TODO: block sizes should be automatically restricted such that shared memory is never exceeded
 	// __shared__ UInt in_sh[IN_BLOCK_SIZE];
@@ -468,7 +474,7 @@ void compute(args* ar_ptr)
 
 	// calculateOverlap(ar.in_dev, in_sh, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
-    calculateOverlap(olaps_sh, in_sh, ar.in_dev, ar.pot_dev, ar.pot_dev_pitch, ar.per_dev, ar.per_dev_pitch, ar.boosts_dev, ar.synPermConnected, ar.num_connected);
+    calculateOverlap(olaps_sh, in_sh, ar.in_dev, ar.pot_dev, ar.pot_dev_pitch, ar.per_dev, ar.per_dev_pitch, ar.boosts_dev, ar.synPermConnected, ar.num_connected, ar.IN_BLOCK_SIZE);
 	
 	__syncthreads();
 
@@ -512,7 +518,7 @@ void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* 
 	UInt* olaps_sh = &shared[0];
 	bool* in_sh = (bool*) &olaps_sh[blockDim.x];
 
-	calculateOverlap(olaps_sh, in_sh, in_dev, pot_dev, pot_dev_pitch, per_dev, per_dev_pitch, boosts_dev, threshold, MAX_CONNECTED);
+	calculateOverlap(olaps_sh, in_sh, in_dev, pot_dev, pot_dev_pitch, per_dev, per_dev_pitch, boosts_dev, threshold, MAX_CONNECTED, inBlockSize);
 
 	if(blockDim.x*blockIdx.x+threadIdx.x < SP_SIZE)
 		olaps_dev[blockDim.x*blockIdx.x+threadIdx.x] = olaps_sh[threadIdx.x];

@@ -83,26 +83,29 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
 void setup_device_pitched(args& ar, bool* in_host, UInt* numPotential, UInt* potentialPools, Real* permanences, Real* boosts, const UInt SP_SIZE, const UInt IN_SIZE, const UInt MAX_CONNECTED)
 {
 	size_t pot_dev_pitch_in_bytes, per_dev_pitch_in_bytes;
-	checkError( cudaMallocPitch((void **) &ar.pot_dev, &pot_dev_pitch_in_bytes, ar.num_connected*sizeof(UInt), SP_SIZE) );
-	checkError( cudaMallocPitch((void **) &ar.per_dev, &per_dev_pitch_in_bytes, ar.num_connected*sizeof(Real), SP_SIZE) );
+	checkError( cudaMallocPitch((void **) &ar.pot_dev, &pot_dev_pitch_in_bytes, MAX_CONNECTED*sizeof(UInt), ar.SP_SIZE) );
+	checkError( cudaMallocPitch((void **) &ar.per_dev, &per_dev_pitch_in_bytes, MAX_CONNECTED*sizeof(Real), ar.SP_SIZE) );
 	ar.pot_dev_pitch = pot_dev_pitch_in_bytes / sizeof(UInt);
 	ar.per_dev_pitch = per_dev_pitch_in_bytes / sizeof(Real);
 
-	checkError( cudaMalloc((void **) &ar.boosts_dev, SP_SIZE*ar.num_connected*sizeof(Real)) );
-    checkError( cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)) ); 
-    checkError( cudaMalloc((void **) &ar.olaps_dev, SP_SIZE*sizeof(UInt)) );
-    checkError( cudaMalloc((void **) &ar.cols_dev, SP_SIZE*sizeof(bool)) );
-	checkError( cudaMalloc((void **) &ar.numPot_dev, SP_SIZE*sizeof(UInt)) );
-    checkError( cudaMalloc((void **) &ar.odc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)) );
-    checkError( cudaMalloc((void **) &ar.adc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)) );
-	checkError( cudaMalloc((void **) &ar.minOdc_dev, NUM_BLOCKS*sizeof(Real)) );
-	checkError( cudaMalloc((void **) &ar.dev_states, SP_SIZE*BLOCK_SIZE*sizeof(curandState)) );
-	
-    cudaError_t result;
+	checkError( cudaMalloc((void **) &ar.boosts_dev, ar.SP_SIZE*ar.num_connected*sizeof(Real)) );
+    checkError( cudaMalloc((void **) &ar.in_dev, ar.IN_SIZE*sizeof(bool)) ); 
+    checkError( cudaMalloc((void **) &ar.olaps_dev, ar.SP_SIZE*sizeof(UInt)) );
+    checkError( cudaMalloc((void **) &ar.cols_dev, ar.SP_SIZE*sizeof(bool)) );
+	checkError( cudaMalloc((void **) &ar.numPot_dev, ar.SP_SIZE*sizeof(UInt)) );
+    checkError( cudaMalloc((void **) &ar.odc_dev, ar.MAX_CONNECTED*ar.SP_SIZE*sizeof(Real)) );
+    checkError( cudaMalloc((void **) &ar.adc_dev, ar.MAX_CONNECTED*ar.SP_SIZE*sizeof(Real)) );
+	checkError( cudaMalloc((void **) &ar.minOdc_dev, ar.NUM_BLOCKS*sizeof(Real)) );
+	checkError( cudaMalloc((void **) &ar.dev_states, ar.SP_SIZE*ar.BLOCK_SIZE*sizeof(curandState)) );	
+    checkError( cudaMalloc((void **) &ar.boosts_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)) ); 
+    
+	cudaError_t result;
 	result = cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy(ar.numPot_dev, numPotential, SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    result = cudaMemcpy(ar.pot_dev, potentialPools, MAX_CONNECTED*SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-    result = cudaMemcpy(ar.per_dev, permanences, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+//    result = cudaMemcpy(ar.pot_dev, potentialPools, MAX_CONNECTED*SP_SIZE*sizeof(UInt), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy2D(ar.pot_dev, pot_dev_pitch_in_bytes, potentialPools, MAX_CONNECTED*sizeof(UInt), MAX_CONNECTED*sizeof(UInt), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+//    result = cudaMemcpy(ar.per_dev, permanences, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy2D(ar.per_dev, per_dev_pitch_in_bytes, permanences, MAX_CONNECTED*sizeof(Real), MAX_CONNECTED*sizeof(Real), SP_SIZE, cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
     result = cudaMemcpy(ar.boosts_dev, boosts, MAX_CONNECTED*SP_SIZE*sizeof(Real), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
 }
 
@@ -116,13 +119,21 @@ void free_memory(args& ar)
 
 void testCalculateOverlap()
 {
+	args ar;
 	const UInt SP_SIZE = 16;
 	const UInt IN_SIZE = 32;
 	const UInt BLOCK_SIZE = 8;
 	const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
 	const UInt MAX_CONNECTED = 4;
 	const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS;
-	Real threshold = 0.1;
+	ar.synPermConnected = 0.1;
+
+	ar.SP_SIZE = SP_SIZE;
+	ar.IN_SIZE = IN_SIZE;
+	ar.BLOCK_SIZE = BLOCK_SIZE;
+	ar.NUM_BLOCKS = NUM_BLOCKS;
+	ar.MAX_CONNECTED = MAX_CONNECTED;
+	ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
 
 							//0, 1, 2, 3, 4, 5, 6, 7
 	bool in_host[IN_SIZE] =	{ 0, 1, 0, 1, 0, 1, 0, 1,
@@ -175,23 +186,22 @@ void testCalculateOverlap()
 	std::fill_n(numPot, SP_SIZE, MAX_CONNECTED);
 
 	UInt correct_overlaps[SP_SIZE] = { 1, 2, 2, 0, 1, 1, 0, 2, 0, 0, 0, 1, 1, 0, 1, 1 }; 
-	// std::fill_n(correct_overlaps, SP_SIZE, 0);
+	// std::fill_n(correct_overlaps, ar.SP_SIZE, 0);
 
 	UInt olaps[SP_SIZE];
 	
-	args ar;
 
-	// setup_device1D(ar, in_host, numPot, potential, permanences, boosts, SP_SIZE, IN_SIZE, MAX_CONNECTED);
+	// setup_device1D(ar, in_host, numPot, potential, permanences, boosts, ar.SP_SIZE, IN_SIZE, ar.MAX_CONNECTED);
 	
 	setup_device_pitched(ar, in_host, numPot, potential, permanences, boosts, SP_SIZE, IN_SIZE, MAX_CONNECTED);
 
-	int sm = BLOCK_SIZE*sizeof(UInt) + IN_BLOCK_SIZE*sizeof(bool);
+	int sm = ar.BLOCK_SIZE*sizeof(UInt) + ar.IN_BLOCK_SIZE*sizeof(bool);
 
-	calculateOverlap_wrapper<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, threshold, IN_BLOCK_SIZE, MAX_CONNECTED, ar.olaps_dev, SP_SIZE, ar.pot_dev_pitch, ar.per_dev_pitch);
+	calculateOverlap_wrapper<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE, sm>>>(ar.in_dev, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED, ar.olaps_dev, ar.SP_SIZE, ar.pot_dev_pitch, ar.per_dev_pitch);
 
-	cudaError_t result = cudaMemcpy(olaps, ar.olaps_dev, SP_SIZE*sizeof(UInt), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0);
+	cudaError_t result = cudaMemcpy(olaps, ar.olaps_dev, ar.SP_SIZE*sizeof(UInt), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0);
 
-	assert(compare<UInt>(correct_overlaps, olaps, SP_SIZE));
+	assert(compare<UInt>(correct_overlaps, olaps, ar.SP_SIZE));
 	// compare<UInt>(correct_overlaps, olaps, SP_SIZE);
 	
 	free_memory(ar);

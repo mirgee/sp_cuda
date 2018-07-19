@@ -251,22 +251,21 @@ int main(int argc, const char * argv[])
 	ar.boostStrength=0.05; // 0 means no boosting
 	ar.minPctOdc=0.001;
 	ar.update_period=50;
-	ar.SP_SIZE = SP_SIZE;
-	ar.MAX_CONNECTED = MAX_CONNECTED;
-	ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
+	// ar.SP_SIZE = SP_SIZE;
+	// ar.MAX_CONNECTED = MAX_CONNECTED;
+	// ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
 
 	// ar.num_connected = std::floor(MAX_CONNECTED*ar.connectedPct);
-	ar.num_connected = IN_BLOCK_SIZE * ar.potentialPct;
 
 	// Host memory allocation
-    bool* cols_host = (bool*) malloc(SP_SIZE*sizeof(bool));
-	memset(cols_host, 0, SP_SIZE*sizeof(bool));
+    bool* cols_host = (bool*) malloc(ar.SP_SIZE*sizeof(bool));
+	memset(cols_host, 0, ar.SP_SIZE*sizeof(bool));
 	// bool* in_host = (bool*) &cols_host[SP_SIZE]; 
 
 	// Host memory init	
 	// in_host = generate01(in_host, IN_SIZE, IN_DENSITY);
 
-	// visualize_input(in_host, potentialPools, permanences, numPotential, IN_SIZE, SP_SIZE, IN_BLOCK_SIZE, MAX_CONNECTED);
+	// visualize_input(in_host, potentialPools, permanences, numPotential, IN_SIZE, SP_SIZE, ar.IN_BLOCK_SIZE, MAX_CONNECTED);
 
 	// Global memory pointers
 	args* ar_dev;
@@ -275,48 +274,48 @@ int main(int argc, const char * argv[])
     checkError( cudaMalloc((void **) &ar_dev, sizeof(ar)) );
 
 	size_t pot_dev_pitch_in_bytes, per_dev_pitch_in_bytes;
-	checkError( cudaMallocPitch((void **) &ar.pot_dev, &pot_dev_pitch_in_bytes, ar.num_connected*sizeof(UInt), SP_SIZE) );
-	checkError( cudaMallocPitch((void **) &ar.per_dev, &per_dev_pitch_in_bytes, ar.num_connected*sizeof(Real), SP_SIZE) );
+	checkError( cudaMallocPitch((void **) &ar.pot_dev, &pot_dev_pitch_in_bytes, ar.num_connected*sizeof(UInt), ar.SP_SIZE) );
+	checkError( cudaMallocPitch((void **) &ar.per_dev, &per_dev_pitch_in_bytes, ar.num_connected*sizeof(Real), ar.SP_SIZE) );
 	ar.pot_dev_pitch = pot_dev_pitch_in_bytes / sizeof(UInt);
 	ar.per_dev_pitch = per_dev_pitch_in_bytes / sizeof(Real);
 
-	checkError( cudaMalloc((void **) &ar.boosts_dev, SP_SIZE*ar.num_connected*sizeof(Real)) );
-    checkError( cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)) ); 
-    checkError( cudaMalloc((void **) &ar.olaps_dev, SP_SIZE*sizeof(UInt)) );
-    checkError( cudaMalloc((void **) &ar.cols_dev, SP_SIZE*sizeof(bool)) );
-	checkError( cudaMalloc((void **) &ar.numPot_dev, SP_SIZE*sizeof(UInt)) );
-    checkError( cudaMalloc((void **) &ar.odc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)) );
-    checkError( cudaMalloc((void **) &ar.adc_dev, MAX_CONNECTED*SP_SIZE*sizeof(Real)) );
+	checkError( cudaMalloc((void **) &ar.boosts_dev, ar.SP_SIZE*ar.num_connected*sizeof(Real)) );
+    checkError( cudaMalloc((void **) &ar.in_dev, ar.IN_SIZE*sizeof(bool)) ); 
+    checkError( cudaMalloc((void **) &ar.olaps_dev, ar.SP_SIZE*sizeof(UInt)) );
+    checkError( cudaMalloc((void **) &ar.cols_dev, ar.SP_SIZE*sizeof(bool)) );
+	checkError( cudaMalloc((void **) &ar.numPot_dev, ar.SP_SIZE*sizeof(UInt)) );
+    checkError( cudaMalloc((void **) &ar.odc_dev, ar.MAX_CONNECTED*ar.SP_SIZE*sizeof(Real)) );
+    checkError( cudaMalloc((void **) &ar.adc_dev, ar.MAX_CONNECTED*ar.SP_SIZE*sizeof(Real)) );
 	checkError( cudaMalloc((void **) &ar.minOdc_dev, NUM_BLOCKS*sizeof(Real)) );
-	checkError( cudaMalloc((void **) &ar.dev_states, SP_SIZE*BLOCK_SIZE*sizeof(curandState)) );
+	checkError( cudaMalloc((void **) &ar.dev_states, ar.SP_SIZE*ar.BLOCK_SIZE*sizeof(curandState)) );
 
 	// Gloal memory initialization
 	// Potential pools
-	thrust::device_vector<UInt> input_indeces(IN_BLOCK_SIZE);
+	thrust::device_vector<UInt> input_indeces(ar.IN_BLOCK_SIZE);
 	// UInt* indeces_ptr = thrust::raw_pointer_cast(input_indeces.data());
 	UInt* indeces_ptr = thrust::raw_pointer_cast(&input_indeces[0]);
 	thrust::sequence(input_indeces.begin(), input_indeces.end(), 0, 1);
 
-	setup_kernel<<<NUM_BLOCKS, BLOCK_SIZE>>>(ar.dev_states);
+	setup_kernel<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE>>>(ar.dev_states);
 
-	size_t sm = BLOCK_SIZE*sizeof(UInt);
-	generatePotentialPools<<<SP_SIZE, BLOCK_SIZE, sm>>>(ar.pot_dev, ar.pot_dev_pitch, ar.num_connected, indeces_ptr, ar.dev_states);
+	size_t sm = ar.BLOCK_SIZE*sizeof(UInt);
+	generatePotentialPools<<<ar.SP_SIZE, ar.BLOCK_SIZE, sm>>>(ar.pot_dev, ar.pot_dev_pitch, ar.num_connected, indeces_ptr, ar.dev_states);
 
 	// Permanences
-	generatePermanences<<<SP_SIZE, ar.num_connected>>>(ar.per_dev, ar.per_dev_pitch, ar.connectedPct, ar.synPermConnected, ar.synPermMax, ar.dev_states);
+	generatePermanences<<<ar.SP_SIZE, ar.num_connected>>>(ar.per_dev, ar.per_dev_pitch, ar.connectedPct, ar.synPermConnected, ar.synPermMax, ar.dev_states);
 
 	// Boosts
 	thrust::device_ptr<float> dev_ptr(ar.boosts_dev);
-	thrust::fill(dev_ptr, dev_ptr+SP_SIZE*ar.num_connected*sizeof(Real), 1.0);
+	thrust::fill(dev_ptr, dev_ptr+ar.SP_SIZE*ar.num_connected*sizeof(Real), 1.0);
 	
 	// Input
-	thrust::device_vector<bool> in_vector(IN_SIZE);
+	thrust::device_vector<bool> in_vector(ar.IN_SIZE);
 	// thrust::generate(in_vector.begin(), in_vector.end(), rand01);
 
 	thrust::counting_iterator<unsigned int> index_sequence_begin(0);
 
     thrust::transform(index_sequence_begin,
-            index_sequence_begin + IN_SIZE,
+            index_sequence_begin + ar.IN_SIZE,
             in_vector.begin(),
             prg());
 
@@ -324,19 +323,19 @@ int main(int argc, const char * argv[])
 
 	// Memcpy to device
     checkError( cudaMemcpy(ar_dev, (void**) &ar, sizeof(ar), cudaMemcpyHostToDevice) );
-    // checkError( cudaMemcpy(ar.in_dev, in_host, IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice) );
+    // checkError( cudaMemcpy(ar.in_dev, in_host, ar.IN_SIZE*sizeof(bool), cudaMemcpyHostToDevice) );
 
 	// Kernel call
-	sm = BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + IN_BLOCK_SIZE*sizeof(bool);
+	sm = ar.BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + ar.IN_BLOCK_SIZE*sizeof(bool);
 	// cudaThreadSynchronize();
-    compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev);
+    compute<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE, sm>>>(ar_dev);
 
 	cudaThreadSynchronize();
     
 	// // Memcpy from device
-    checkError( cudaMemcpy(cols_host, ar.cols_dev, SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost)); 
+    checkError( cudaMemcpy(cols_host, ar.cols_dev, ar.SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost)); 
 
-	visualize_output(cols_host, SP_SIZE);
+	visualize_output(cols_host, ar.SP_SIZE);
 
     // cudaFree(ar_dev); cudaFree(data_dev);
 
