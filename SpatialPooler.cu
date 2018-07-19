@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <cuda.h>
+#include <curand_kernel.h>
 
 using namespace std;
 
@@ -205,7 +207,7 @@ void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, R
 __device__
 void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* per_dev, size_t per_dev_pitch, Real* boosts_dev, Real threshold, UInt numConnected)
 {
-	// TODO: block sizes should be restricted such that shared memory is never exceeded
+	// TODO: block sizes should be automatically restricted such that shared memory is never exceeded
 	// __shared__ UInt in_sh[IN_BLOCK_SIZE];
 
 	// thread per column, each loads index, then permanence, one after another -> accesses are coalesced
@@ -225,7 +227,7 @@ void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, 
     {
 		UInt bl_idx = pot_dev[sp_idx*pot_dev_pitch+i]; // Index of block-specific input
 		// UInt bl_idx = *((UInt*)((char*) pot_dev + sp_idx*pot_dev_pitch) + i);
-		if((per_dev[sp_idx*per_dev_pitch + i] > threshold) && in_sh[bl_idx])
+		if(in_sh[bl_idx] && (per_dev[sp_idx*per_dev_pitch + i] > threshold))
 		// if((*(((Real*)per_dev + sp_idx*per_dev_pitch)+i) > threshold) && in_sh[bl_idx])
         	olaps += boosts_dev[sp_idx+i];
     }
@@ -246,7 +248,7 @@ void inhibitColumns(UInt* olaps_sh, bool* cols_dev, Real* active_sh, bool &activ
 	{
 		if(olaps_sh[i] > olaps_sh[tx]) numLarger++;
 	}
-	if(numLarger < sparsity*blockDim.x) active = true;
+	if(numLarger < sparsity * (Real) blockDim.x) active = true;
 
 	__syncthreads();
 
@@ -433,9 +435,6 @@ void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real m
 }
 
 
-
-
-
 __global__
 void compute(args* ar_ptr)
 {
@@ -469,7 +468,7 @@ void compute(args* ar_ptr)
 
 	// calculateOverlap(ar.in_dev, in_sh, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
-    calculateOverlap(olaps_sh, in_sh, ar.cols_dev, ar.pot_dev, ar.pot_dev_pitch, ar.per_dev, ar.per_dev_pitch, ar.boosts_dev, ar.synPermConnected, ar.num_connected);
+    calculateOverlap(olaps_sh, in_sh, ar.in_dev, ar.pot_dev, ar.pot_dev_pitch, ar.per_dev, ar.per_dev_pitch, ar.boosts_dev, ar.synPermConnected, ar.num_connected);
 	
 	__syncthreads();
 
@@ -477,35 +476,47 @@ void compute(args* ar_ptr)
 	
 	__syncthreads();
 
-	adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+	// adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
-	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
+	// updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
-	averageActivityReduction(active_sh);
+	// averageActivityReduction(active_sh);
 
-	__syncthreads();
+	// __syncthreads();
 
-	updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
+	// updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
 
-	bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
+	// bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
 
-	if(ar.iteration_num % ar.update_period == 0)
-		updateMinOdc(ar.odc_dev, ar.odc_dev, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
+	// if(ar.iteration_num % ar.update_period == 0)
+	// 	   updateMinOdc(ar.odc_dev, ar.odc_dev, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
 }
 
+// __global__
+// void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE)
+// {
+// 	extern __shared__ UInt shared[];
+// 	UInt* olaps_sh = &shared[0];
+// 	bool* in_sh = (bool*) &olaps_sh[blockDim.x];
+// 
+// 	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, threshold, inBlockSize, MAX_CONNECTED);
+// 
+// 	if(blockDim.x*blockIdx.x+threadIdx.x < SP_SIZE)
+// 		olaps_dev[blockDim.x*blockIdx.x+threadIdx.x] = olaps_sh[threadIdx.x];
+// }
+
 __global__
-void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE)
+void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE, size_t pot_dev_pitch, size_t per_dev_pitch)
 {
 	extern __shared__ UInt shared[];
 	UInt* olaps_sh = &shared[0];
 	bool* in_sh = (bool*) &olaps_sh[blockDim.x];
 
-	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, threshold, inBlockSize, MAX_CONNECTED);
+	calculateOverlap(olaps_sh, in_sh, in_dev, pot_dev, pot_dev_pitch, per_dev, per_dev_pitch, boosts_dev, threshold, MAX_CONNECTED);
 
 	if(blockDim.x*blockIdx.x+threadIdx.x < SP_SIZE)
 		olaps_dev[blockDim.x*blockIdx.x+threadIdx.x] = olaps_sh[threadIdx.x];
 }
-
 
 __global__
 void inhibitColumns_wrapper(UInt* olaps_dev, bool* cols_dev, Real localAreaDensity, const UInt BLOCK_SIZE)

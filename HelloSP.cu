@@ -210,6 +210,15 @@ void visualize_output(bool* cols_host, const UInt SP_SIZE)
 	for(int i=0; i < SP_SIZE; i++)
 		if(cols_host[i] > 0) ones++;
 	printf("Sparsity: %f \n", (Real)ones/SP_SIZE);
+
+	printf("OUTPUT\n");
+	for(int i=0; i<SP_SIZE; i++)
+	{
+		printf("%d ", cols_host[i]);
+		if(i % BLOCK_SIZE == 0 && i > 0)
+			printf("\n");
+	}
+	printf("\n");
 }
 
 void printErrorMessage(cudaError_t error, int memorySize){
@@ -229,7 +238,7 @@ int main(int argc, const char * argv[])
 	ar.iteration_num=0;
 	ar.learn=true;
 	ar.localAreaDensity=0.02; // SP density after inhibition
-    ar.potentialPct=0.5; // 
+    ar.potentialPct=0.1; // 
     ar.connectedPct=0.5;
     ar.stimulusThreshold=0;
     ar.synPermTrimThreshold=0.025;
@@ -247,11 +256,11 @@ int main(int argc, const char * argv[])
 	ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
 
 	// ar.num_connected = std::floor(MAX_CONNECTED*ar.connectedPct);
-	ar.num_connected = IN_BLOCK_SIZE / 20;
+	ar.num_connected = IN_BLOCK_SIZE * ar.potentialPct;
 
 	// Host memory allocation
-	size_t host_alloc_size = (IN_SIZE+SP_SIZE)*sizeof(bool);
-    bool* cols_host = (bool*) malloc(host_alloc_size);
+    bool* cols_host = (bool*) malloc(SP_SIZE*sizeof(bool));
+	memset(cols_host, 0, SP_SIZE*sizeof(bool));
 	// bool* in_host = (bool*) &cols_host[SP_SIZE]; 
 
 	// Host memory init	
@@ -311,7 +320,7 @@ int main(int argc, const char * argv[])
             in_vector.begin(),
             prg());
 
-	ar.cols_dev = thrust::raw_pointer_cast(&in_vector[0]);
+	ar.in_dev = thrust::raw_pointer_cast(&in_vector[0]);
 
 	// Memcpy to device
     checkError( cudaMemcpy(ar_dev, (void**) &ar, sizeof(ar), cudaMemcpyHostToDevice) );
@@ -322,7 +331,9 @@ int main(int argc, const char * argv[])
 	// cudaThreadSynchronize();
     compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev);
 
-    // // Memcpy from device
+	cudaThreadSynchronize();
+    
+	// // Memcpy from device
     checkError( cudaMemcpy(cols_host, ar.cols_dev, SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost)); 
 
 	visualize_output(cols_host, SP_SIZE);
