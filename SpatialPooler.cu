@@ -34,7 +34,6 @@ struct args
 	Real boostStrength;
 	Real minPctOdc;
 	bool learn;
-	UInt num_connected = IN_BLOCK_SIZE * potentialPct;
 
 	// Data
 	bool* in_dev;
@@ -49,13 +48,14 @@ struct args
 	Real* minOdc_dev;
 
 	// Constants
-	UInt SP_SIZE = 65536;
+	UInt SP_SIZE = 32768;
 	UInt IN_SIZE = 131072;
 	UInt BLOCK_SIZE = 1024;
 	UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
 	UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
 	UInt MAX_CONNECTED = 1024;
 	Real IN_DENSITY = 0.5; // Density of input connections
+	UInt num_connected;
 
 	// Array pitches
 	size_t pot_dev_pitch;
@@ -91,13 +91,11 @@ __global__
 void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connected, UInt* input_indeces, curandState* states, UInt IN_BLOCK_SIZE)
 {
 	UInt tx = threadIdx.x;
-	// UInt BLOCK_SIZE = blockDim.x;
+	UInt BLOCK_SIZE = blockDim.x;
 	// No, start with 1 elem per thread
 	// UInt elems_per_thread = __ceil((float)IN_BLOCK_SIZE / BLOCK_SIZE);
 	curandState localState = states[threadIdx.x + blockIdx.x*blockDim.x];
 	extern __shared__ UInt shared[];
-
-	UInt BLOCK_SIZE = blockDim.x;
 
 	// int i, j;
 	// for(i = 0; i < SHARED_SIZE / BLOCK_SIZE; i++)
@@ -112,10 +110,9 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
 	{
 		// x = (float) (curand(&localState) % 100) / 100;
 		x = curand_uniform(&localState);
-		if(x > (float) BLOCK_SIZE / IN_BLOCK_SIZE)
-		// if(x < 0.01)
+		// if(x > (float) BLOCK_SIZE / IN_BLOCK_SIZE)
+		if(x < 0.01)
 		{
-			// No switch, only read
 			shared[tx] = input_indeces[tx+id];
 		}
 		id += BLOCK_SIZE;
@@ -167,12 +164,10 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
     }
 
 	__syncthreads();
-	// Write to global memory
 	
 	if(tx < num_connected)
 		pot_dev[blockIdx.x*pot_dev_pitch + tx] = shared[tx];
 		// *((UInt*) ((char*) pot_dev + blockIdx.x*pot_dev_pitch) + tx) = shared[tx];
-
 }
 
 __global__
@@ -213,17 +208,12 @@ void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, R
 __device__
 void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* per_dev, size_t per_dev_pitch, Real* boosts_dev, Real threshold, UInt numConnected, const UInt IN_BLOCK_SIZE)
 {
-	// TODO: block sizes should be automatically restricted such that shared memory is never exceeded
-	// __shared__ UInt in_sh[IN_BLOCK_SIZE];
-
-	// thread per column, each loads index, then permanence, one after another -> accesses are coalesced
-	// accesses to shared memory are not coalesced
-
 	UInt tx = threadIdx.x;
    	UInt sp_idx = blockDim.x*blockIdx.x + tx; // Global index in the SP
 	UInt in_block_start = IN_BLOCK_SIZE*blockIdx.x;
 	UInt olaps = 0;
 
+	// TODO: This is incorrect - some blocks end up with all false in_sh and therefore 0 olaps and all activate
 	for(int i = 0; i < IN_BLOCK_SIZE - tx; i += blockDim.x)
 		in_sh[tx + i] = in_dev[in_block_start + tx + i]; 
 

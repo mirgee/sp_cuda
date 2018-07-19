@@ -149,24 +149,13 @@ bool* generate01(bool* ar, size_t size, Real inDensity)
 	return ar;
 }
 
-__host__ __device__ __inline__ bool rand01() {
-	thrust::default_random_engine rng;
-	thrust::uniform_int_distribution<int> dist(0, 1);
-	rng.discard(IN_SIZE);
-
-	return (bool) dist(rng);
-
-	// thrust::default_random_engine rng;
-	// thrust::uniform_real_distribution<float> dist(0, 1);
-	// rng.discard(n);
-
-	// return dist(rng) <= IN_DENSITY ? 1 : 0;
-
-}
-
-
 struct prg : public thrust::unary_function<unsigned int,bool>
 {
+	Real IN_DENSITY;
+
+	__host__ __device__
+		prg(Real ind) : IN_DENSITY(ind) {}
+	
     __host__ __device__
         bool operator()(const unsigned int thread_id) const
         {
@@ -203,7 +192,7 @@ void visualize_input(bool* in_host, UInt* potentialPools, Real* permanences, UIn
 	printf("\n");
 }
 
-void visualize_output(bool* cols_host, const UInt SP_SIZE)
+void visualize_output(bool* cols_host, const UInt SP_SIZE, UInt BLOCK_SIZE)
 {
 	// The final sparsity will approach target with increasing block size
 	int ones = 0;
@@ -231,8 +220,6 @@ int main(int argc, const char * argv[])
 {
 	srand(time(NULL));
 	
-	
-
     // construct input args
     args ar;
 	ar.iteration_num=0;
@@ -251,15 +238,11 @@ int main(int argc, const char * argv[])
 	ar.boostStrength=0.05; // 0 means no boosting
 	ar.minPctOdc=0.001;
 	ar.update_period=50;
-	// ar.SP_SIZE = SP_SIZE;
-	// ar.MAX_CONNECTED = MAX_CONNECTED;
-	// ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
 
-	// ar.num_connected = std::floor(MAX_CONNECTED*ar.connectedPct);
+	ar.num_connected = std::floor(ar.MAX_CONNECTED*ar.connectedPct);
 
 	// Host memory allocation
     bool* cols_host = (bool*) malloc(ar.SP_SIZE*sizeof(bool));
-	memset(cols_host, 0, ar.SP_SIZE*sizeof(bool));
 	// bool* in_host = (bool*) &cols_host[SP_SIZE]; 
 
 	// Host memory init	
@@ -286,20 +269,19 @@ int main(int argc, const char * argv[])
 	checkError( cudaMalloc((void **) &ar.numPot_dev, ar.SP_SIZE*sizeof(UInt)) );
     checkError( cudaMalloc((void **) &ar.odc_dev, ar.MAX_CONNECTED*ar.SP_SIZE*sizeof(Real)) );
     checkError( cudaMalloc((void **) &ar.adc_dev, ar.MAX_CONNECTED*ar.SP_SIZE*sizeof(Real)) );
-	checkError( cudaMalloc((void **) &ar.minOdc_dev, NUM_BLOCKS*sizeof(Real)) );
+	checkError( cudaMalloc((void **) &ar.minOdc_dev, ar.NUM_BLOCKS*sizeof(Real)) );
 	checkError( cudaMalloc((void **) &ar.dev_states, ar.SP_SIZE*ar.BLOCK_SIZE*sizeof(curandState)) );
 
 	// Gloal memory initialization
 	// Potential pools
 	thrust::device_vector<UInt> input_indeces(ar.IN_BLOCK_SIZE);
-	// UInt* indeces_ptr = thrust::raw_pointer_cast(input_indeces.data());
 	UInt* indeces_ptr = thrust::raw_pointer_cast(&input_indeces[0]);
 	thrust::sequence(input_indeces.begin(), input_indeces.end(), 0, 1);
 
 	setup_kernel<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE>>>(ar.dev_states);
 
 	size_t sm = ar.BLOCK_SIZE*sizeof(UInt);
-	generatePotentialPools<<<ar.SP_SIZE, ar.BLOCK_SIZE, sm>>>(ar.pot_dev, ar.pot_dev_pitch, ar.num_connected, indeces_ptr, ar.dev_states);
+	generatePotentialPools<<<ar.SP_SIZE, ar.BLOCK_SIZE, sm>>>(ar.pot_dev, ar.pot_dev_pitch, ar.num_connected, indeces_ptr, ar.dev_states, ar.IN_BLOCK_SIZE);
 
 	// Permanences
 	generatePermanences<<<ar.SP_SIZE, ar.num_connected>>>(ar.per_dev, ar.per_dev_pitch, ar.connectedPct, ar.synPermConnected, ar.synPermMax, ar.dev_states);
@@ -310,14 +292,13 @@ int main(int argc, const char * argv[])
 	
 	// Input
 	thrust::device_vector<bool> in_vector(ar.IN_SIZE);
-	// thrust::generate(in_vector.begin(), in_vector.end(), rand01);
 
 	thrust::counting_iterator<unsigned int> index_sequence_begin(0);
 
     thrust::transform(index_sequence_begin,
             index_sequence_begin + ar.IN_SIZE,
             in_vector.begin(),
-            prg());
+            prg(ar.synPermConnected));
 
 	ar.in_dev = thrust::raw_pointer_cast(&in_vector[0]);
 
@@ -335,7 +316,7 @@ int main(int argc, const char * argv[])
 	// // Memcpy from device
     checkError( cudaMemcpy(cols_host, ar.cols_dev, ar.SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost)); 
 
-	visualize_output(cols_host, ar.SP_SIZE);
+	visualize_output(cols_host, ar.SP_SIZE, ar.BLOCK_SIZE);
 
     // cudaFree(ar_dev); cudaFree(data_dev);
 
