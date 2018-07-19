@@ -246,7 +246,8 @@ int main(int argc, const char * argv[])
 	ar.MAX_CONNECTED = MAX_CONNECTED;
 	ar.IN_BLOCK_SIZE = IN_BLOCK_SIZE;
 
-	ar.num_connected = std::floor(MAX_CONNECTED*ar.connectedPct);
+	// ar.num_connected = std::floor(MAX_CONNECTED*ar.connectedPct);
+	ar.num_connected = IN_BLOCK_SIZE / 20;
 
 	// Host memory allocation
 	size_t host_alloc_size = (IN_SIZE+SP_SIZE)*sizeof(bool);
@@ -264,8 +265,12 @@ int main(int argc, const char * argv[])
 	// Global memory allocation
     checkError( cudaMalloc((void **) &ar_dev, sizeof(ar)) );
 
-	checkError( cudaMallocPitch((void **) &ar.pot_dev, &ar.pot_dev_pitch, ar.num_connected, SP_SIZE) );
-	checkError( cudaMallocPitch((void **) &ar.per_dev, &ar.per_dev_pitch, ar.num_connected, SP_SIZE) );
+	size_t pot_dev_pitch_in_bytes, per_dev_pitch_in_bytes;
+	checkError( cudaMallocPitch((void **) &ar.pot_dev, &pot_dev_pitch_in_bytes, ar.num_connected*sizeof(UInt), SP_SIZE) );
+	checkError( cudaMallocPitch((void **) &ar.per_dev, &per_dev_pitch_in_bytes, ar.num_connected*sizeof(Real), SP_SIZE) );
+	ar.pot_dev_pitch = pot_dev_pitch_in_bytes / sizeof(UInt);
+	ar.per_dev_pitch = per_dev_pitch_in_bytes / sizeof(Real);
+
 	checkError( cudaMalloc((void **) &ar.boosts_dev, SP_SIZE*ar.num_connected*sizeof(Real)) );
     checkError( cudaMalloc((void **) &ar.in_dev, IN_SIZE*sizeof(bool)) ); 
     checkError( cudaMalloc((void **) &ar.olaps_dev, SP_SIZE*sizeof(UInt)) );
@@ -281,13 +286,11 @@ int main(int argc, const char * argv[])
 	thrust::device_vector<UInt> input_indeces(IN_BLOCK_SIZE);
 	// UInt* indeces_ptr = thrust::raw_pointer_cast(input_indeces.data());
 	UInt* indeces_ptr = thrust::raw_pointer_cast(&input_indeces[0]);
-	// cudaMemset(indeces_ptr, 0, IN_BLOCK_SIZE * sizeof(UInt));
 	thrust::sequence(input_indeces.begin(), input_indeces.end(), 0, 1);
 
 	setup_kernel<<<NUM_BLOCKS, BLOCK_SIZE>>>(ar.dev_states);
 
 	size_t sm = BLOCK_SIZE*sizeof(UInt);
-	cudaThreadSynchronize();
 	generatePotentialPools<<<SP_SIZE, BLOCK_SIZE, sm>>>(ar.pot_dev, ar.pot_dev_pitch, ar.num_connected, indeces_ptr, ar.dev_states);
 
 	// Permanences
@@ -316,7 +319,7 @@ int main(int argc, const char * argv[])
 
 	// Kernel call
 	sm = BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + IN_BLOCK_SIZE*sizeof(bool);
-	cudaThreadSynchronize();
+	// cudaThreadSynchronize();
     compute<<<NUM_BLOCKS, BLOCK_SIZE, sm>>>(ar_dev);
 
     // // Memcpy from device

@@ -162,8 +162,8 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
 	// Write to global memory
 	
 	if(tx < num_connected)
-		// pot_dev[blockIdx.x*pot_dev_pitch + tx] = shared[tx];
-		*((UInt*) ((char*) pot_dev + blockIdx.x*pot_dev_pitch) + tx) = shared[tx];
+		pot_dev[blockIdx.x*pot_dev_pitch + tx] = shared[tx];
+		// *((UInt*) ((char*) pot_dev + blockIdx.x*pot_dev_pitch) + tx) = shared[tx];
 
 }
 
@@ -175,7 +175,8 @@ void generatePermanences(Real* per_dev, size_t per_dev_pitch, Real connectedPct,
 	curandState localState = states[col*blockDim.x + tx];
 	// curandState localState = *states;
 	bool connected = (Real) curand_uniform(&localState) <= connectedPct;
-	*((Real*) ((char*) per_dev + col*per_dev_pitch) + tx) = connected ? synPermConnected + (synPermMax - synPermConnected)*((Real) curand_uniform(&localState)) :
+	// *((Real*) ((char*) per_dev + col*per_dev_pitch) + tx) = connected ? synPermConnected + (synPermMax - synPermConnected)*((Real) curand_uniform(&localState)) :
+	per_dev[col*per_dev_pitch + tx] = connected ? synPermConnected + (synPermMax - synPermConnected)*((Real) curand_uniform(&localState)) :
 													synPermConnected * (Real)curand_uniform(&localState);
 }
 
@@ -222,9 +223,10 @@ void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, 
 
     for(int i=0; i < numConnected; i++)
     {
-		// UInt bl_idx = pot_dev[sp_idx*pot_dev_pitch+i]; // Index of block-specific input
-		UInt bl_idx = *((UInt*)((char*) pot_dev + sp_idx*pot_dev_pitch) + i);
-		if((*(((Real*)per_dev + sp_idx*per_dev_pitch)+i) > threshold) && in_sh[bl_idx])
+		UInt bl_idx = pot_dev[sp_idx*pot_dev_pitch+i]; // Index of block-specific input
+		// UInt bl_idx = *((UInt*)((char*) pot_dev + sp_idx*pot_dev_pitch) + i);
+		if((per_dev[sp_idx*per_dev_pitch + i] > threshold) && in_sh[bl_idx])
+		// if((*(((Real*)per_dev + sp_idx*per_dev_pitch)+i) > threshold) && in_sh[bl_idx])
         	olaps += boosts_dev[sp_idx+i];
     }
 
