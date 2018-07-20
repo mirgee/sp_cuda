@@ -7,15 +7,6 @@ using namespace std;
 typedef unsigned int UInt;
 typedef float Real;
 
-// Define global constants
-// const UInt SP_SIZE = 65536;
-// const UInt IN_SIZE = 131072;
-// const UInt BLOCK_SIZE = 1024;
-// const UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
-// const UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
-// const UInt MAX_CONNECTED = 1024;
-// const Real IN_DENSITY = 0.5; // Density of input connections
-
 struct args
 {
 	// Parameters
@@ -48,13 +39,13 @@ struct args
 	Real* minOdc_dev;
 
 	// Constants
-	UInt SP_SIZE = 32768;
-	UInt IN_SIZE = 131072;
-	UInt BLOCK_SIZE = 1024;
-	UInt NUM_BLOCKS = SP_SIZE/BLOCK_SIZE;
-	UInt IN_BLOCK_SIZE = IN_SIZE/NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
-	UInt MAX_CONNECTED = 1024;
-	Real IN_DENSITY = 0.5; // Density of input connections
+	UInt SP_SIZE;
+	UInt IN_SIZE;
+	UInt BLOCK_SIZE;
+	UInt NUM_BLOCKS;
+	UInt IN_BLOCK_SIZE; // Size of chunk of input processed by a single cuda block
+	UInt MAX_CONNECTED;
+	Real IN_DENSITY; // Density of input connections
 	UInt num_connected;
 
 	// Array pitches
@@ -167,7 +158,6 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
 	
 	if(tx < num_connected)
 		pot_dev[blockIdx.x*pot_dev_pitch + tx] = shared[tx];
-		// *((UInt*) ((char*) pot_dev + blockIdx.x*pot_dev_pitch) + tx) = shared[tx];
 }
 
 __global__
@@ -176,9 +166,7 @@ void generatePermanences(Real* per_dev, size_t per_dev_pitch, Real connectedPct,
 	UInt col = blockIdx.x;
 	UInt tx = threadIdx.x;
 	curandState localState = states[col*blockDim.x + tx];
-	// curandState localState = *states;
 	bool connected = (Real) curand_uniform(&localState) <= connectedPct;
-	// *((Real*) ((char*) per_dev + col*per_dev_pitch) + tx) = connected ? synPermConnected + (synPermMax - synPermConnected)*((Real) curand_uniform(&localState)) :
 	per_dev[col*per_dev_pitch + tx] = connected ? synPermConnected + (synPermMax - synPermConnected)*((Real) curand_uniform(&localState)) :
 													synPermConnected * (Real)curand_uniform(&localState);
 }
@@ -213,7 +201,6 @@ void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, 
 	UInt in_block_start = IN_BLOCK_SIZE*blockIdx.x;
 	UInt olaps = 0;
 
-	// TODO: This is incorrect - some blocks end up with all false in_sh and therefore 0 olaps and all activate
 	for(int i = 0; i < IN_BLOCK_SIZE - tx; i += blockDim.x)
 		in_sh[tx + i] = in_dev[in_block_start + tx + i]; 
 
@@ -222,9 +209,7 @@ void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, 
     for(int i=0; i < numConnected; i++)
     {
 		UInt bl_idx = pot_dev[sp_idx*pot_dev_pitch+i]; // Index of block-specific input
-		// UInt bl_idx = *((UInt*)((char*) pot_dev + sp_idx*pot_dev_pitch) + i);
 		if(in_sh[bl_idx] && (per_dev[sp_idx*per_dev_pitch + i] > threshold))
-		// if((*(((Real*)per_dev + sp_idx*per_dev_pitch)+i) > threshold) && in_sh[bl_idx])
         	olaps += boosts_dev[sp_idx+i];
     }
 
@@ -253,19 +238,19 @@ void inhibitColumns(UInt* olaps_sh, bool* cols_dev, Real* active_sh, bool &activ
 }
 
 __device__
-void adaptSynapses(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool active, const UInt inBlockSize, const UInt MAX_CONNECTED)
+void adaptSynapses(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool active, const UInt inBlockSize, UInt num_connected, const size_t per_dev_pitch, const size_t pot_dev_pitch)
 {
     int tx = threadIdx.x;
    	int sp_idx = blockDim.x*blockIdx.x + tx;
 	if(active)
 	{
-		for(int i=0; i < MAX_CONNECTED; i++)
+		for(int i=0; i < num_connected; i++)
     	{
-			int in_idx = pot_dev[sp_idx*MAX_CONNECTED+i];
+			int in_idx = pot_dev[sp_idx*pot_dev_pitch+i];
 			if(in_dev[inBlockSize*blockIdx.x + in_idx])
-				per_dev[sp_idx*MAX_CONNECTED+i] = min(1.0, per_dev[sp_idx*MAX_CONNECTED+i]+synPermActiveInc);
+				per_dev[sp_idx*per_dev_pitch+i] = min(1.0, per_dev[sp_idx*per_dev_pitch+i]+synPermActiveInc);
 			else
-				per_dev[sp_idx*MAX_CONNECTED+i] = max(per_dev[sp_idx*MAX_CONNECTED+i]-synPermInactiveDec, 0.0);
+				per_dev[sp_idx*per_dev_pitch+i] = max(per_dev[sp_idx*per_dev_pitch+i]-synPermInactiveDec, 0.0);
     	}
 	}
 }
@@ -375,7 +360,6 @@ void updateMinOdc(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real minPctOdc,
 		minOdc_dev[blockIdx.x] = minPctOdc * maxOdc;
 }
 
-// Lambdas are available in nvcc > 7.5
 __device__
 void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real minPctOdc, const UInt SP_SIZE)
 {
@@ -472,7 +456,7 @@ void compute(args* ar_ptr)
 	
 	__syncthreads();
 
-	adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+	adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.num_connected, ar.per_dev_pitch, ar.pot_dev_pitch);
 
 	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
@@ -480,26 +464,26 @@ void compute(args* ar_ptr)
 
 	__syncthreads();
 
-	// updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
+	updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
 
-	// bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
+	bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
 
-	// if(ar.iteration_num % ar.update_period == 0)
-	// 	   updateMinOdc(ar.odc_dev, ar.odc_dev, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
+	if(ar.iteration_num % ar.update_period == 0)
+		updateMinOdc(ar.odc_dev, ar.odc_dev, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
 }
 
-// __global__
-// void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE)
-// {
-// 	extern __shared__ UInt shared[];
-// 	UInt* olaps_sh = &shared[0];
-// 	bool* in_sh = (bool*) &olaps_sh[blockDim.x];
-// 
-// 	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, threshold, inBlockSize, MAX_CONNECTED);
-// 
-// 	if(blockDim.x*blockIdx.x+threadIdx.x < SP_SIZE)
-// 		olaps_dev[blockDim.x*blockIdx.x+threadIdx.x] = olaps_sh[threadIdx.x];
-// }
+__global__
+void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE)
+{
+	extern __shared__ UInt shared[];
+	UInt* olaps_sh = &shared[0];
+	bool* in_sh = (bool*) &olaps_sh[blockDim.x];
+
+	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, threshold, inBlockSize, MAX_CONNECTED);
+
+	if(blockDim.x*blockIdx.x+threadIdx.x < SP_SIZE)
+		olaps_dev[blockDim.x*blockIdx.x+threadIdx.x] = olaps_sh[threadIdx.x];
+}
 
 __global__
 void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE, size_t pot_dev_pitch, size_t per_dev_pitch)
@@ -531,13 +515,13 @@ void inhibitColumns_wrapper(UInt* olaps_dev, bool* cols_dev, Real localAreaDensi
 }
 
 __global__
-void adaptSynapses_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool* active_arr, const UInt IN_BLOCK_SIZE, const UInt MAX_CONNECTED, const UInt SP_SIZE)
+void adaptSynapses_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synPermActiveInc, Real synPermInactiveDec, bool* active_arr, const UInt IN_BLOCK_SIZE, const size_t per_dev_pitch, const size_t pot_dev_pitch, UInt num_connected, const UInt SP_SIZE)
 {
 	int sp_idx = blockIdx.x*blockDim.x + threadIdx.x;
 	if(sp_idx < SP_SIZE)
 	{
 		bool active = active_arr[sp_idx];
-		adaptSynapses(in_dev, pot_dev, per_dev, synPermActiveInc, synPermInactiveDec, active, IN_BLOCK_SIZE, MAX_CONNECTED);
+		adaptSynapses(in_dev, pot_dev, per_dev, synPermActiveInc, synPermInactiveDec, active, IN_BLOCK_SIZE, num_connected, per_dev_pitch, pot_dev_pitch);
 	}
 }
 

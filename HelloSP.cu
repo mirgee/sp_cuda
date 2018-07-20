@@ -118,7 +118,6 @@ Real* generatePermanences(Real* permanences, int cols, int inputSize, UInt* pote
 	return permanences;
 }
 
-// TO BE DELETED
 // There should also be a parameter to raise permanences so that minimum number of synapses is connected.
 UInt** computeConnected(Real** permanences, UInt** potential, UInt cols, UInt inputSize,
 		Real synPermConnected_, const UInt MAX_CONNECTED, UInt* numPotential)
@@ -238,7 +237,14 @@ int main(int argc, const char * argv[])
 	ar.boostStrength=0.05; // 0 means no boosting
 	ar.minPctOdc=0.001;
 	ar.update_period=50;
-
+	
+	ar.SP_SIZE = 32768;
+	ar.IN_SIZE = 131072;
+	ar.BLOCK_SIZE = 1024;
+	ar.NUM_BLOCKS = ar.SP_SIZE/ar.BLOCK_SIZE;
+	ar.IN_BLOCK_SIZE = ar.IN_SIZE/ar.NUM_BLOCKS; // Size of chunk of input processed by a single cuda block
+	ar.MAX_CONNECTED = 1024;
+	ar.IN_DENSITY = 0.5; // Density of input connections
 	ar.num_connected = std::floor(ar.MAX_CONNECTED*ar.connectedPct);
 
 	// Host memory allocation
@@ -310,12 +316,9 @@ int main(int argc, const char * argv[])
 
 	// Kernel call
 	sm = ar.BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + ar.IN_BLOCK_SIZE*sizeof(bool);
-	// cudaThreadSynchronize();
     compute<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE, sm>>>(ar_dev);
-
-	cudaThreadSynchronize();
     
-	// // Memcpy from device
+	// Memcpy from device
     checkError( cudaMemcpy(cols_host, ar.cols_dev, ar.SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost)); 
 
 	visualize_output(cols_host, ar.SP_SIZE, ar.BLOCK_SIZE);
