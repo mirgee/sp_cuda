@@ -277,12 +277,12 @@ int main(int argc, const char * argv[])
 	thrust::device_vector<UInt> input_indeces(ar.IN_BLOCK_SIZE);
 	UInt* indeces_ptr = thrust::raw_pointer_cast(&input_indeces[0]);
 	thrust::sequence(input_indeces.begin(), input_indeces.end(), 0, 1);
-
+	
 	setup_kernel<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE>>>(ar.dev_states);
 
 	size_t sm = ar.BLOCK_SIZE*sizeof(UInt);
 	generatePotentialPools<<<ar.SP_SIZE, ar.BLOCK_SIZE, sm>>>(ar.pot_dev, ar.pot_dev_pitch, ar.num_connected, indeces_ptr, ar.dev_states, ar.IN_BLOCK_SIZE);
-
+	
 	// Permanences
 	generatePermanences<<<ar.SP_SIZE, ar.num_connected>>>(ar.per_dev, ar.per_dev_pitch, ar.connectedPct, ar.synPermConnected, ar.synPermMax, ar.dev_states);
 
@@ -298,9 +298,11 @@ int main(int argc, const char * argv[])
     thrust::transform(index_sequence_begin,
             index_sequence_begin + ar.IN_SIZE,
             in_vector.begin(),
-            prg(ar.synPermConnected));
+            prg(ar.IN_DENSITY));
 
 	ar.in_dev = thrust::raw_pointer_cast(&in_vector[0]);
+
+	// thrust::copy(in_vector.begin(), in_vector.end(), std::ostream_iterator<bool>(std::cout, " "));
 
 	// Memcpy to device
     checkError( cudaMemcpy(ar_dev, (void**) &ar, sizeof(ar), cudaMemcpyHostToDevice) );

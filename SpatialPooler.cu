@@ -244,7 +244,7 @@ void inhibitColumns(UInt* olaps_sh, bool* cols_dev, Real* active_sh, bool &activ
 	{
 		if(olaps_sh[i] > olaps_sh[tx]) numLarger++;
 	}
-	if(numLarger < sparsity * (Real) blockDim.x) active = true;
+	if(numLarger < sparsity * (Real) blockDim.x && numLarger > 0) active = true;
 
 	__syncthreads();
 
@@ -472,13 +472,13 @@ void compute(args* ar_ptr)
 	
 	__syncthreads();
 
-	// adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
+	adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
-	// updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
+	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
-	// averageActivityReduction(active_sh);
+	averageActivityReduction(active_sh);
 
-	// __syncthreads();
+	__syncthreads();
 
 	// updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
 
