@@ -454,22 +454,22 @@ void compute(args* ar_ptr)
 
 	inhibitColumns(olaps_sh, ar.cols_dev, active_sh, active, ar.localAreaDensity);
 	
-	__syncthreads();
+	// __syncthreads();
 
-	adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.num_connected, ar.per_dev_pitch, ar.pot_dev_pitch);
+	// adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.num_connected, ar.per_dev_pitch, ar.pot_dev_pitch);
 
-	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
+	// updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
-	averageActivityReduction(active_sh);
+	// averageActivityReduction(active_sh);
 
-	__syncthreads();
+	// __syncthreads();
 
-	updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
+	// updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
 
-	bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
+	// bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
 
-	if(ar.iteration_num % ar.update_period == 0)
-		updateMinOdc(ar.odc_dev, ar.odc_dev, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
+	// if(ar.iteration_num % ar.update_period == 0)
+	// 	updateMinOdc(ar.odc_dev, ar.odc_dev, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
 }
 
 __global__

@@ -13,8 +13,8 @@ bool compare(const T* corr_vec, const T* out_vec, UInt size)
 	{
 		printf("%.2f \t %.2f \t %d \n", (float)corr_vec[i], (float)out_vec[i], i);
 		// printf("%d, ", out_vec[i]);
-		// if(roundf(corr_vec[i] * 100) / 100 != roundf(out_vec[i] * 100) / 100) 
-		//  	return false;
+		if(roundf(corr_vec[i] * 100) / 100 != roundf(out_vec[i] * 100) / 100) 
+		 	return false;
 	}
 	return true;
 }
@@ -337,53 +337,53 @@ void testAdaptSynapses()
 	
 	free_memory(ar);
 }
-// 
-// void testAverageActivity()
-// {
-// 	const UInt BLOCK_SIZE = 512;
-// 	bool active[BLOCK_SIZE] = { 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-// 								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-// 								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-// 								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-// 								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-// 								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-// 								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-// 								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-// 							  };
-// 
-// 	bool* cols_dev;
-// 	Real* avg_dev;
-// 	Real avg_host[BLOCK_SIZE];
-// 	
-//     cudaError_t result = cudaMalloc((void **) &cols_dev, BLOCK_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
-//     result = cudaMalloc((void **) &avg_dev, BLOCK_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0);
-//     result = cudaMemcpy(cols_dev, active, BLOCK_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
-// 
-// 	averageActivity_wrapper<<<1, BLOCK_SIZE, BLOCK_SIZE*sizeof(Real)>>>(cols_dev, avg_dev);
-// 
-// 
-//     result = cudaMemcpy(&avg_host, avg_dev, BLOCK_SIZE*sizeof(Real), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0);
-// 
-// 	for(int i=0; i<BLOCK_SIZE; i++) 
-// 	{
-// 		printf("%.2f ", avg_host[i]);
-// 		assert(avg_host[i] == 0.25);
-// 	}
-// 
-// 	printf("\n");
-// 
-// 	cudaFree(cols_dev); cudaFree(avg_dev);
-// }
-// 
-// void testMinOdcUpdate()
-// {
-// 	// This should test multiple blocks...
-// }
+
+void testAverageActivity()
+{
+	const UInt BLOCK_SIZE = 512;
+	bool active[BLOCK_SIZE] = { 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+								1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+							  };
+
+	bool* cols_dev;
+	Real* avg_dev;
+	Real avg_host[BLOCK_SIZE];
+	
+    cudaError_t result = cudaMalloc((void **) &cols_dev, BLOCK_SIZE*sizeof(bool)); if(result) printErrorMessage(result, 0);
+    result = cudaMalloc((void **) &avg_dev, BLOCK_SIZE*sizeof(Real)); if(result) printErrorMessage(result, 0);
+    result = cudaMemcpy(cols_dev, active, BLOCK_SIZE*sizeof(bool), cudaMemcpyHostToDevice); if(result) printErrorMessage(result, 0);
+
+	averageActivity_wrapper<<<1, BLOCK_SIZE, BLOCK_SIZE*sizeof(Real)>>>(cols_dev, avg_dev);
+
+
+    result = cudaMemcpy(&avg_host, avg_dev, BLOCK_SIZE*sizeof(Real), cudaMemcpyDeviceToHost); if(result) printErrorMessage(result, 0);
+
+	for(int i=0; i<BLOCK_SIZE; i++) 
+	{
+		printf("%.2f ", avg_host[i]);
+		assert(avg_host[i] == 0.25);
+	}
+
+	printf("\n");
+
+	cudaFree(cols_dev); cudaFree(avg_dev);
+}
+
+void testMinOdcUpdate()
+{
+	// This should test multiple blocks...
+}
 
 int main(int argc, const char * argv[])
 {
 	testCalculateOverlap();
 	testInhibitColumns();
 	testAdaptSynapses();
-	// testAverageActivity();
+	testAverageActivity();
 }
