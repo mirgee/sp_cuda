@@ -66,10 +66,10 @@ __global__ void setup_kernel(curandState *state)
 }
 
 __device__
-inline void random_swap(UInt& a, UInt& b, curandState* state)
+inline void random_swap(UInt& a, UInt& b, curandState& state)
 {
 	// if(curand(state) & 1)
-	if(curand_uniform(state) < 0.2)
+	if(curand_uniform(&state) < 0.5)
 	{
 		UInt temp;
 		temp = a;
@@ -83,15 +83,8 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
 {
 	UInt tx = threadIdx.x;
 	UInt BLOCK_SIZE = blockDim.x;
-	// No, start with 1 elem per thread
-	// UInt elems_per_thread = __ceil((float)IN_BLOCK_SIZE / BLOCK_SIZE);
 	curandState localState = states[threadIdx.x + blockIdx.x*blockDim.x];
 	extern __shared__ UInt shared[];
-
-	// int i, j;
-	// for(i = 0; i < SHARED_SIZE / BLOCK_SIZE; i++)
-	// 	j = i*SHARED_SIZE + tx;
-	// 	shared[j] = j < IN_BLOCK_SIZE ? input_indeces[j] : shared[j];
 
 	shared[tx] = input_indeces[tx];
 
@@ -102,7 +95,7 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
 		// x = (float) (curand(&localState) % 100) / 100;
 		x = curand_uniform(&localState);
 		// if(x > (float) BLOCK_SIZE / IN_BLOCK_SIZE)
-		if(x < 0.01)
+		if(x < 0.5)
 		{
 			shared[tx] = input_indeces[tx+id];
 		}
@@ -112,12 +105,20 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
 	__syncthreads();
 
 	// Do reduction on shared
+	if(BLOCK_SIZE >= 1024)
+	{ 
+		if(tx < 512) 
+		{ 
+			random_swap(shared[tx], shared[tx+512], localState); 
+		} 
+		__syncthreads(); 
+	}
 
 	if(BLOCK_SIZE >= 512)
 	{ 
 		if(tx < 256) 
 		{ 
-			random_swap(shared[tx], shared[tx+256], &localState); 
+			random_swap(shared[tx], shared[tx+256], localState); 
 		} 
 		__syncthreads(); 
 	}
@@ -125,7 +126,7 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
    	{ 
 		if(tx < 128) 
 		{ 
-			random_swap(shared[tx], shared[tx+128], &localState); 
+			random_swap(shared[tx], shared[tx+128], localState); 
 		} 
 		__syncthreads(); 
 	}
@@ -133,7 +134,7 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
    	{ 
 		if(tx < 64) 
 		{ 
-			random_swap(shared[tx], shared[tx+64], &localState); 
+			random_swap(shared[tx], shared[tx+64], localState); 
 		} 
 		__syncthreads(); 
 	}
@@ -141,17 +142,17 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
 	if(tx < 32) 
     {
         if(BLOCK_SIZE >= 64) 
-			random_swap(shared[tx], shared[tx+32], &localState);
+			random_swap(shared[tx], shared[tx+32], localState);
         if(BLOCK_SIZE >= 32) 
-			random_swap(shared[tx], shared[tx+16], &localState);
+			random_swap(shared[tx], shared[tx+16], localState);
         if(BLOCK_SIZE >= 16) 
-			random_swap(shared[tx], shared[tx+8], &localState);
+			random_swap(shared[tx], shared[tx+8], localState);
         if(BLOCK_SIZE >= 8) 
-			random_swap(shared[tx], shared[tx+4], &localState);
+			random_swap(shared[tx], shared[tx+4], localState);
         if(BLOCK_SIZE >= 4)
-			random_swap(shared[tx], shared[tx+2], &localState);
+			random_swap(shared[tx], shared[tx+2], localState);
         if(BLOCK_SIZE >= 2) 
-			random_swap(shared[tx], shared[tx+1], &localState);
+			random_swap(shared[tx], shared[tx+1], localState);
     }
 
 	__syncthreads();
@@ -199,7 +200,7 @@ void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, 
 	UInt tx = threadIdx.x;
    	UInt sp_idx = blockDim.x*blockIdx.x + tx; // Global index in the SP
 	UInt in_block_start = IN_BLOCK_SIZE*blockIdx.x;
-	UInt olaps = 0;
+	olaps_sh[tx] = 0;
 
 	for(int i = 0; i < IN_BLOCK_SIZE - tx; i += blockDim.x)
 		in_sh[tx + i] = in_dev[in_block_start + tx + i]; 
@@ -210,12 +211,12 @@ void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, 
     {
 		UInt bl_idx = pot_dev[sp_idx*pot_dev_pitch+i]; // Index of block-specific input
 		if(in_sh[bl_idx] && (per_dev[sp_idx*per_dev_pitch + i] > threshold))
-        	olaps += boosts_dev[sp_idx+i];
+        	olaps_sh[tx] += boosts_dev[sp_idx+i];
     }
 
-	__syncthreads();
-
-	olaps_sh[tx] = olaps;
+// 	__syncthreads();
+// 
+// 	olaps_sh[tx] = olaps;
 }
 
 __device__
@@ -283,7 +284,15 @@ void averageActivityReduction(Real* active_sh)
 {
 	int tx = threadIdx.x;
 	UInt BLOCK_SIZE = blockDim.x;
-	
+
+	if(BLOCK_SIZE >= 1024)
+	{ 
+		if(tx < 512) 
+		{ 
+			active_sh[tx] += active_sh[tx+512]; 
+		} 
+		__syncthreads(); 
+	}
 	if(BLOCK_SIZE >= 512)
 	{ 
 		if(tx < 256) 
@@ -368,7 +377,15 @@ void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real m
 	UInt BLOCK_SIZE = blockDim.x;
 
 	odc_sh[tx] = odc_dev[sp_idx];
-	
+
+	if(BLOCK_SIZE >= 1024)
+	{ 
+		if(tx < 512) 
+		{ 
+			odc_sh[tx] = max(odc_sh[tx], odc_sh[tx+512]); 
+		} 
+		__syncthreads(); 
+	}
 	if(BLOCK_SIZE >= 512)
 	{ 
 		if(tx < 256) 
@@ -454,22 +471,22 @@ void compute(args* ar_ptr)
 
 	inhibitColumns(olaps_sh, ar.cols_dev, active_sh, active, ar.localAreaDensity);
 	
-	// __syncthreads();
+	__syncthreads();
 
-	// adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.num_connected, ar.per_dev_pitch, ar.pot_dev_pitch);
+	adaptSynapses(ar.cols_dev, ar.pot_dev, ar.per_dev, ar.synPermActiveInc, ar.synPermInactiveDec, active, ar.IN_BLOCK_SIZE, ar.num_connected, ar.per_dev_pitch, ar.pot_dev_pitch);
 
-	// updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
+	updateDutyCycles(ar.odc_dev, ar.adc_dev, olaps_sh, active, ar.iteration_num, ar.dutyCyclePeriod);
 
-	// averageActivityReduction(active_sh);
+	averageActivityReduction(active_sh);
 
-	// __syncthreads();
+	__syncthreads();
 
-	// updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
+	updateBoosts(ar.adc_dev, ar.boosts_dev, avg_act, ar.boostStrength);
 
-	// bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
+	bumpUpColumnsWithWeakOdc(ar.odc_dev, ar.per_dev, ar.numPot_dev, ar.minOdc_dev, ar.synPermBelowStimulusInc, ar.MAX_CONNECTED);
 
-	// if(ar.iteration_num % ar.update_period == 0)
-	// 	updateMinOdc(ar.odc_dev, ar.odc_dev, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
+	if(ar.iteration_num % ar.update_period == 0)
+		updateMinOdc(ar.odc_dev, ar.odc_dev, ar.minOdc_dev, ar.minPctOdc, ar.SP_SIZE);
 }
 
 __global__
