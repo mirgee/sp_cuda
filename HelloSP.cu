@@ -60,6 +60,7 @@ UInt* generatePotentialPools(UInt* potentialPools, int cols, const UInt IN_BLOCK
     return potentialPools;
 }
 
+
 Real initPermanencesConnected(Real synPermConnected_, Real synPermMax_)
 {
 	Real p = synPermConnected_ +
@@ -191,14 +192,23 @@ void visualize_input(bool* in_host, UInt* potentialPools, Real* permanences, UIn
 	printf("\n");
 }
 
+
+void visualize_input_generated_on_device(thrust::device_vector<bool>& in_vector, UInt* pot_pools_host, const UInt MAX_CONNECTED, const UInt SP_SIZE)
+{
+	printf("INPUT\n");
+	thrust::copy(in_vector.begin(), in_vector.end(), std::ostream_iterator<bool>(std::cout, " "));
+	printf("\n");
+	// printf("POTENTIAL POOLS");
+	// for(int i=0; i<SP_SIZE; i++)
+	// {
+	// 	for(int j=0; j<MAX_CONNECTED; j++)
+	// 		printf("%d \t", pot_pools_host[i*MAX_CONNECTED+j]);
+	// 	printf("\n");
+	// }
+}
+
 void visualize_output(bool* cols_host, const UInt SP_SIZE, UInt BLOCK_SIZE)
 {
-	// The final sparsity will approach target with increasing block size
-	int ones = 0;
-	for(int i=0; i < SP_SIZE; i++)
-		if(cols_host[i] > 0) ones++;
-	printf("Sparsity: %f \n", (Real)ones/SP_SIZE);
-
 	printf("OUTPUT\n");
 	for(int i=0; i<SP_SIZE; i++)
 	{
@@ -207,6 +217,13 @@ void visualize_output(bool* cols_host, const UInt SP_SIZE, UInt BLOCK_SIZE)
 			printf("\n");
 	}
 	printf("\n");
+	
+	// The final sparsity will approach target with increasing block size
+	int ones = 0;
+	for(int i=0; i < SP_SIZE; i++)
+		if(cols_host[i] > 0) ones++;
+	printf("Sparsity: %f \n", (Real)ones/SP_SIZE);
+
 }
 
 void printErrorMessage(cudaError_t error, int memorySize){
@@ -280,16 +297,17 @@ int main(int argc, const char * argv[])
 	checkError( cudaMalloc((void **) &ar.minOdc_dev, ar.NUM_BLOCKS*sizeof(Real)) );
 	checkError( cudaMalloc((void **) &ar.dev_states, ar.SP_SIZE*ar.BLOCK_SIZE*sizeof(curandState)) );
 
-	// Gloal memory initialization
-	// Potential pools
-	thrust::device_vector<UInt> input_indeces(ar.IN_BLOCK_SIZE);
-	UInt* indeces_ptr = thrust::raw_pointer_cast(&input_indeces[0]);
-	thrust::sequence(input_indeces.begin(), input_indeces.end(), 0, 1);
-	
-	setup_kernel<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE>>>(ar.dev_states);
+	// Global memory initialization
 
-	size_t sm = ar.BLOCK_SIZE*sizeof(UInt);
+	// Potential pools
+	// thrust::device_vector<UInt> input_indeces(ar.IN_BLOCK_SIZE);
+	// UInt* indeces_ptr = thrust::raw_pointer_cast(&input_indeces[0]);
+	// thrust::sequence(input_indeces.begin(), input_indeces.end(), 0, 1);
+
+	// size_t sm = ar.BLOCK_SIZE*sizeof(UInt);
 	// generatePotentialPools<<<ar.SP_SIZE, ar.BLOCK_SIZE, sm>>>(ar.pot_dev, ar.pot_dev_pitch, ar.num_connected, indeces_ptr, ar.dev_states, ar.IN_BLOCK_SIZE);
+
+	setup_kernel<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE>>>(ar.dev_states);
 	
 	// Permanences
 	generatePermanences<<<ar.SP_SIZE, ar.num_connected>>>(ar.per_dev, ar.per_dev_pitch, ar.connectedPct, ar.synPermConnected, ar.synPermMax, ar.dev_states);
@@ -310,7 +328,7 @@ int main(int argc, const char * argv[])
 
 	ar.in_dev = thrust::raw_pointer_cast(&in_vector[0]);
 
-	// thrust::copy(in_vector.begin(), in_vector.end(), std::ostream_iterator<bool>(std::cout, " "));
+	visualize_input_generated_on_device(in_vector, pot_pools_host, ar.num_connected, ar.SP_SIZE);
 
 	// Memcpy to device
     checkError( cudaMemcpy(ar_dev, (void**) &ar, sizeof(ar), cudaMemcpyHostToDevice) );
@@ -319,7 +337,7 @@ int main(int argc, const char * argv[])
 
 	// Kernel call
 	cudaThreadSynchronize();
-	sm = ar.BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + ar.IN_BLOCK_SIZE*sizeof(bool);
+	size_t sm = ar.BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + ar.IN_BLOCK_SIZE*sizeof(bool);
     compute<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE, sm>>>(ar_dev);
     
 	cudaThreadSynchronize();
