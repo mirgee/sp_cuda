@@ -338,7 +338,10 @@ int main(int argc, const char * argv[])
 
 	// Global memory initialization
 
+	setup_kernel<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE>>>(ar.dev_states);
+
 	// Potential pools
+	// TODO: Unfortunately, when we generate potential pools on device, all activity seems to accumulate in the first and last block of SP for some reason
 	// thrust::device_vector<UInt> input_indeces(ar.IN_BLOCK_SIZE);
 	// UInt* indeces_ptr = thrust::raw_pointer_cast(&input_indeces[0]);
 	// thrust::sequence(input_indeces.begin(), input_indeces.end(), 0, 1);
@@ -346,8 +349,6 @@ int main(int argc, const char * argv[])
 	// size_t sm = ar.BLOCK_SIZE*sizeof(UInt);
 	// generatePotentialPools<<<ar.SP_SIZE, ar.BLOCK_SIZE, sm>>>(ar.pot_dev, ar.pot_dev_pitch, ar.num_connected, indeces_ptr, ar.dev_states, ar.IN_BLOCK_SIZE);
 
-	setup_kernel<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE>>>(ar.dev_states);
-	
 	// Permanences
 	generatePermanences<<<ar.SP_SIZE, ar.num_connected>>>(ar.per_dev, ar.per_dev_pitch, ar.connectedPct, ar.synPermConnected, ar.synPermMax, ar.dev_states);
 
