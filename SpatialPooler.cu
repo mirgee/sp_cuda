@@ -66,7 +66,7 @@ __global__ void setup_kernel(curandState *state)
 }
 
 __device__
-inline void random_swap(UInt& a, UInt& b, curandState& state)
+inline void random_swap(volatile UInt& a, volatile UInt& b, curandState& state)
 {
 	// if(curand(state) & 1)
 	if(curand_uniform(&state) < 0.5)
@@ -84,7 +84,7 @@ void generatePotentialPools(UInt* pot_dev, size_t pot_dev_pitch, UInt num_connec
 	UInt tx = threadIdx.x;
 	UInt BLOCK_SIZE = blockDim.x;
 	curandState localState = states[threadIdx.x + blockIdx.x*blockDim.x];
-	extern __shared__ UInt shared[];
+	extern __shared__ volatile UInt shared[];
 
 	shared[tx] = input_indeces[tx];
 
@@ -173,7 +173,7 @@ void generatePermanences(Real* per_dev, size_t per_dev_pitch, Real connectedPct,
 }
 
 __device__
-void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
+void calculateOverlap(bool* in_dev, volatile bool* in_sh, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, volatile UInt* olaps_sh, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED)
 { 
 	int tx = threadIdx.x;
    	int sp_idx = blockDim.x*blockIdx.x + tx; // Global index in the SP
@@ -195,7 +195,7 @@ void calculateOverlap(bool* in_dev, bool* in_sh, UInt* pot_dev, Real* per_dev, R
 }
 
 __device__
-void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* per_dev, size_t per_dev_pitch, Real* boosts_dev, Real threshold, UInt numConnected, const UInt IN_BLOCK_SIZE)
+void calculateOverlap(volatile UInt* olaps_sh, volatile bool* in_sh, bool* in_dev, UInt* pot_dev, size_t pot_dev_pitch, Real* per_dev, size_t per_dev_pitch, Real* boosts_dev, Real threshold, UInt numConnected, const UInt IN_BLOCK_SIZE)
 {
 	UInt tx = threadIdx.x;
    	UInt sp_idx = blockDim.x*blockIdx.x + tx; // Global index in the SP
@@ -220,7 +220,7 @@ void calculateOverlap(UInt* olaps_sh, bool* in_sh, bool* in_dev, UInt* pot_dev, 
 }
 
 __device__
-void inhibitColumns(UInt* olaps_sh, bool* cols_dev, Real* active_sh, bool &active, Real sparsity)
+void inhibitColumns(volatile UInt* olaps_sh, bool* cols_dev, volatile Real* active_sh, bool &active, Real sparsity)
 {
     int tx = threadIdx.x;
 	int numLarger = 0;
@@ -257,7 +257,7 @@ void adaptSynapses(bool* in_dev, UInt* pot_dev, Real* per_dev, Real synPermActiv
 }
 
 __device__
-void updateDutyCycles(Real* odc_dev, Real* adc_dev, UInt* olaps_sh, bool active, UInt iteration_num, UInt dutyCyclePeriod)
+void updateDutyCycles(Real* odc_dev, Real* adc_dev, volatile UInt* olaps_sh, bool active, UInt iteration_num, UInt dutyCyclePeriod)
 {
     int tx = threadIdx.x;
 
@@ -269,7 +269,7 @@ void updateDutyCycles(Real* odc_dev, Real* adc_dev, UInt* olaps_sh, bool active,
 }
 
 __device__
-void averageActivity(Real* active_sh)
+void averageActivity(volatile Real* active_sh)
 {
 	Real avg = 0;
 	for(int i=0; i < blockDim.x; i++)
@@ -280,7 +280,7 @@ void averageActivity(Real* active_sh)
 }
 
 __device__
-void averageActivityReduction(Real* active_sh)
+void averageActivityReduction(volatile Real* active_sh)
 {
 	int tx = threadIdx.x;
 	UInt BLOCK_SIZE = blockDim.x;
@@ -360,7 +360,7 @@ void bumpUpColumnsWithWeakOdc(Real* odc_dev, Real* per_dev, UInt* numPot, Real* 
 }
 
 __device__
-void updateMinOdc(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real minPctOdc, const UInt SP_SIZE)
+void updateMinOdc(Real* odc_dev, volatile Real* odc_sh, Real* minOdc_dev, Real minPctOdc, const UInt SP_SIZE)
 {
 	Real maxOdc = 0;
 	for(int i=0; i<SP_SIZE; i++)
@@ -370,7 +370,7 @@ void updateMinOdc(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real minPctOdc,
 }
 
 __device__
-void updateMinOdcReduction(Real* odc_dev, Real* odc_sh, Real* minOdc_dev, Real minPctOdc, const UInt SP_SIZE)
+void updateMinOdcReduction(Real* odc_dev, volatile Real* odc_sh, Real* minOdc_dev, Real minPctOdc, const UInt SP_SIZE)
 {
 	int tx = threadIdx.x;
 	int sp_idx = blockDim.x*blockIdx.x + threadIdx.x;
@@ -456,12 +456,11 @@ void compute(args* ar_ptr)
 	bool active = false;
 	Real avg_act = 0;
 
-    extern __shared__ UInt shared[];
-	UInt* olaps_sh = &shared[0];
-	// Lepsi jako volatile
-	Real* active_sh = (Real*)&shared[blockDim.x];
-	Real* odc_sh = &active_sh[blockDim.x];
-	bool* in_sh = (bool*) &odc_sh[blockDim.x];
+    extern __shared__ volatile UInt shared[];
+	volatile UInt* olaps_sh = &shared[0];
+	volatile Real* active_sh = (Real*)&shared[blockDim.x];
+	volatile Real* odc_sh = &active_sh[blockDim.x];
+	volatile bool* in_sh = (bool*) &odc_sh[blockDim.x];
 
 	// calculateOverlap(ar.in_dev, in_sh, ar.pot_dev, ar.per_dev, ar.boosts_dev, ar.numPot_dev, olaps_sh, ar.synPermConnected, ar.IN_BLOCK_SIZE, ar.MAX_CONNECTED);
 
@@ -492,9 +491,9 @@ void compute(args* ar_ptr)
 __global__
 void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE)
 {
-	extern __shared__ UInt shared[];
-	UInt* olaps_sh = &shared[0];
-	bool* in_sh = (bool*) &olaps_sh[blockDim.x];
+	extern __shared__ volatile UInt shared[];
+	volatile UInt* olaps_sh = &shared[0];
+	volatile bool* in_sh = (bool*) &olaps_sh[blockDim.x];
 
 	calculateOverlap(in_dev, in_sh, pot_dev, per_dev, boosts_dev, numPot_dev, olaps_sh, threshold, inBlockSize, MAX_CONNECTED);
 
@@ -505,9 +504,9 @@ void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* 
 __global__
 void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* boosts_dev, UInt* numPot_dev, Real threshold, const UInt inBlockSize, const UInt MAX_CONNECTED, UInt* olaps_dev, const UInt SP_SIZE, size_t pot_dev_pitch, size_t per_dev_pitch)
 {
-	extern __shared__ UInt shared[];
-	UInt* olaps_sh = &shared[0];
-	bool* in_sh = (bool*) &olaps_sh[blockDim.x];
+	extern __shared__ volatile UInt shared[];
+	volatile UInt* olaps_sh = &shared[0];
+	volatile bool* in_sh = (bool*) &olaps_sh[blockDim.x];
 
 	calculateOverlap(olaps_sh, in_sh, in_dev, pot_dev, pot_dev_pitch, per_dev, per_dev_pitch, boosts_dev, threshold, MAX_CONNECTED, inBlockSize);
 
@@ -518,9 +517,9 @@ void calculateOverlap_wrapper(bool* in_dev, UInt* pot_dev, Real* per_dev, Real* 
 __global__
 void inhibitColumns_wrapper(UInt* olaps_dev, bool* cols_dev, Real localAreaDensity, const UInt BLOCK_SIZE)
 {
-	extern __shared__ UInt shared[];
-	UInt* olaps_sh = &shared[0];
-	Real* active_sh = (Real*) &olaps_sh[BLOCK_SIZE];
+	extern __shared__ volatile UInt shared[];
+	volatile UInt* olaps_sh = &shared[0];
+	volatile Real* active_sh = (Real*) &olaps_sh[BLOCK_SIZE];
 
 	olaps_sh[threadIdx.x] = olaps_dev[threadIdx.x];
 
@@ -547,8 +546,8 @@ void averageActivity_wrapper(bool* cols_dev, Real* avg_dev)
 {
 	int tx = threadIdx.x;
 
-	extern __shared__ UInt shared[];
-	Real* active_sh = (Real*) &shared[0];
+	extern __shared__ volatile UInt shared[];
+	volatile Real* active_sh = (Real*) &shared[0];
 
 	active_sh[tx] = (Real) cols_dev[tx];
 
