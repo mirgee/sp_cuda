@@ -41,13 +41,12 @@ using namespace std;
 typedef unsigned int UInt;
 typedef float Real;
 
-UInt* generatePotentialPools(UInt* potentialPools, int cols, const UInt IN_BLOCK_SIZE, Real potentialPct, const UInt MAX_CONNECTED)
+UInt* generatePotentialPoolsWithVariableLength(UInt* potentialPools, int cols, const UInt IN_BLOCK_SIZE, Real potentialPct, const UInt MAX_CONNECTED)
 {
     int connected = 0;
     for(int i=0; i < cols; i++)
     {
     	connected = 0;
-		// Generated indeces should be in (0,IN_BLOCK_SIZE) and their count should be <= MAX_CONNECTED and around potentialPct*IN_BLOCK_SIZE
         for(int j=0; j < IN_BLOCK_SIZE; j++)
         {
             if((Real)(rand()%100)/100 <= potentialPct && connected < MAX_CONNECTED)
@@ -60,6 +59,43 @@ UInt* generatePotentialPools(UInt* potentialPools, int cols, const UInt IN_BLOCK
     return potentialPools;
 }
 
+// This approach will work only when IN_BLOCK_SIZE !>> num_desired_connected (Knuth's algorithm)
+// In our case, usually IN_BLOCK_SIZE !>> num_desired_connected
+UInt* generatePotentialPoolsEqualLengts(UInt* potentialPools, const UInt SP_SIZE, const UInt IN_BLOCK_SIZE, const UInt num_desired_connected)
+{
+    for(int i=0; i < SP_SIZE; i++)
+    {
+    	int connected = 0;
+        for(int j=0; j < IN_BLOCK_SIZE; j++)
+        {
+            if((Real)(rand()%100)/100 <= (num_desired_connected-connected)/(IN_BLOCK_SIZE-j) && connected < num_desired_connected)
+            {
+                potentialPools[i*num_desired_connected + connected++] = j; 
+            }
+        }
+    }
+    return potentialPools;
+}
+
+UInt* generatePotentialPoolsUsingShuffle(UInt* potentialPools, const UInt SP_SIZE, const UInt IN_BLOCK_SIZE, const UInt MAX_CONNECTED) 
+{
+	
+	vector<UInt> indeces(IN_BLOCK_SIZE);
+	iota(indeces.begin(), indeces.end(), 0);
+
+	// We could also do this on the device
+	// thrust::host_vector<UInt> indeces(IN_BLOCK_SIZE);
+	// thrust::sequence(input_indeces.begin(), input_indeces.end(), 0, 1);
+
+	for(int i=0; i < SP_SIZE; i++) {
+		random_shuffle(indeces.begin(), indeces.end());
+		copy(indeces.begin(), indeces.begin()+MAX_CONNECTED, &potentialPools[i*MAX_CONNECTED]);
+		// This may slightly improve performance, but slows down initialization
+		sort(&potentialPools[i*MAX_CONNECTED], &potentialPools[(i+1)*MAX_CONNECTED]);
+	}
+
+	return potentialPools;
+}
 
 Real initPermanencesConnected(Real synPermConnected_, Real synPermMax_)
 {
@@ -198,6 +234,7 @@ void visualize_input_generated_on_device(thrust::device_vector<bool>& in_vector,
 	printf("INPUT\n");
 	thrust::copy(in_vector.begin(), in_vector.end(), std::ostream_iterator<bool>(std::cout, " "));
 	printf("\n");
+	// This overlows stdout buffer (better write to a file if necessary)
 	// printf("POTENTIAL POOLS");
 	// for(int i=0; i<SP_SIZE; i++)
 	// {
@@ -205,6 +242,8 @@ void visualize_input_generated_on_device(thrust::device_vector<bool>& in_vector,
 	// 		printf("%d \t", pot_pools_host[i*MAX_CONNECTED+j]);
 	// 	printf("\n");
 	// }
+
+
 }
 
 void visualize_output(bool* cols_host, const UInt SP_SIZE, UInt BLOCK_SIZE)
@@ -268,7 +307,7 @@ int main(int argc, const char * argv[])
     bool* cols_host = (bool*) malloc(ar.SP_SIZE*sizeof(bool));
 	// bool* in_host = (bool*) &cols_host[SP_SIZE]; 
 	UInt* pot_pools_host = (UInt*) malloc(ar.SP_SIZE*ar.num_connected*sizeof(UInt));
- 	pot_pools_host = generatePotentialPools(pot_pools_host, ar.SP_SIZE, ar.IN_BLOCK_SIZE, ar.potentialPct, ar.num_connected);
+ 	pot_pools_host = generatePotentialPoolsUsingShuffle(pot_pools_host, ar.SP_SIZE, ar.IN_BLOCK_SIZE, ar.num_connected);
 
 	// Host memory init	
 	// in_host = generate01(in_host, IN_SIZE, IN_DENSITY);
@@ -288,7 +327,7 @@ int main(int argc, const char * argv[])
 	ar.per_dev_pitch = per_dev_pitch_in_bytes / sizeof(Real);
 
 	checkError( cudaMalloc((void **) &ar.boosts_dev, ar.SP_SIZE*ar.num_connected*sizeof(Real)) );
-    checkError( cudaMalloc((void **) &ar.in_dev, ar.IN_SIZE*sizeof(bool)) ); 
+    // checkError( cudaMalloc((void **) &ar.in_dev, ar.IN_SIZE*sizeof(bool)) ); 
     checkError( cudaMalloc((void **) &ar.olaps_dev, ar.SP_SIZE*sizeof(UInt)) );
     checkError( cudaMalloc((void **) &ar.cols_dev, ar.SP_SIZE*sizeof(bool)) );
 	checkError( cudaMalloc((void **) &ar.numPot_dev, ar.SP_SIZE*sizeof(UInt)) );
@@ -313,9 +352,13 @@ int main(int argc, const char * argv[])
 	generatePermanences<<<ar.SP_SIZE, ar.num_connected>>>(ar.per_dev, ar.per_dev_pitch, ar.connectedPct, ar.synPermConnected, ar.synPermMax, ar.dev_states);
 
 	// Boosts
-	thrust::device_ptr<float> dev_ptr(ar.boosts_dev);
-	thrust::fill(dev_ptr, dev_ptr+ar.SP_SIZE*ar.num_connected*sizeof(Real), 1.0);
+	thrust::device_ptr<float> boosts_ptr(ar.boosts_dev);
+	thrust::fill(boosts_ptr, boosts_ptr+ar.SP_SIZE*ar.num_connected*sizeof(Real), 1.0);
 	
+	// Number of potentialy connected synapses - unnecessary if we want it variable
+	thrust::device_ptr<UInt> num_ptr(ar.numPot_dev);
+	thrust::fill(num_ptr, num_ptr+ar.SP_SIZE*sizeof(UInt), ar.num_connected);
+
 	// Input
 	thrust::device_vector<bool> in_vector(ar.IN_SIZE);
 
@@ -336,17 +379,24 @@ int main(int argc, const char * argv[])
     checkError( cudaMemcpy2D(ar.pot_dev, pot_dev_pitch_in_bytes, pot_pools_host, ar.num_connected*sizeof(UInt), ar.num_connected*sizeof(UInt), ar.SP_SIZE, cudaMemcpyHostToDevice) );
 
 	// Kernel call
-	cudaThreadSynchronize();
+	// cudaThreadSynchronize();
 	size_t sm = ar.BLOCK_SIZE*(2*sizeof(Real) + sizeof(UInt)) + ar.IN_BLOCK_SIZE*sizeof(bool);
     compute<<<ar.NUM_BLOCKS, ar.BLOCK_SIZE, sm>>>(ar_dev);
     
-	cudaThreadSynchronize();
+	// cudaThreadSynchronize();
 	// Memcpy from device
     checkError( cudaMemcpy(cols_host, ar.cols_dev, ar.SP_SIZE*sizeof(bool), cudaMemcpyDeviceToHost)); 
 
 	visualize_output(cols_host, ar.SP_SIZE, ar.BLOCK_SIZE);
 
-    // cudaFree(ar_dev); cudaFree(data_dev);
-
-    return 0;
+	// cudaFree(ar.in_dev); 
+	cudaFree(ar.cols_dev); 
+	cudaFree(ar.pot_dev);
+   	cudaFree(ar.per_dev); 
+	cudaFree(ar.boosts_dev);
+	cudaFree(ar.odc_dev); 
+	cudaFree(ar.adc_dev); 
+	cudaFree(ar.numPot_dev);
+    
+	return 0;
 }
